@@ -1,0 +1,19 @@
+# dependencies / build
+node_modules/
+dist/
+dist-ssr/
+out/
+*.log
+
+# tauri / rust
+src-tauri/target/
+src-tauri/gen/schemas/
+
+# 모델 원본은 models/ 아래에 readme와 함께 커밋한다 (여러 PC에서 작업하기 위해).
+# 변환 캐시만 제외한다.
+*.bpmx
+
+# os / editor
+.DS_Store
+Thumbs.db
+*.local
