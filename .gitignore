@@ -1,0 +1,26 @@
+# dependencies / build
+node_modules/
+dist/
+dist-ssr/
+out/
+*.log
+
+# tauri / rust
+src-tauri/target/
+src-tauri/gen/schemas/
+
+# Model files are never committed. Redistribution is forbidden by the
+# model terms (YYB, Sour, DIVA, Lat) and the Piapro character license.
+models/
+*.pmx
+*.pmd
+*.bpmx
+*.tga
+*.spa
+*.sph
+*.dds
+
+# os / editor
+.DS_Store
+Thumbs.db
+*.local
