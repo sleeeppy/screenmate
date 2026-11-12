@@ -44,9 +44,19 @@ export class FollowBox {
   update(feetX: number, feetY: number, characterHeight: number, shape: BoxShape = STANDING_BOX): CssRect {
     const width = Math.ceil(characterHeight * shape.widthRatio);
     const height = Math.ceil(characterHeight * shape.heightRatio);
+    return this.apply(feetX - width / 2, feetY + characterHeight * shape.footPadRatio - height, width, height);
+  }
+
+  /** 몸 중심 기준 정사각형 상자 (들렸을 때·떨어질 때: 기울고 다리가 처져도 잘리지 않게) */
+  around(centerX: number, centerY: number, size: number): CssRect {
+    const side = Math.ceil(size);
+    return this.apply(centerX - side / 2, centerY - side / 2, side, side);
+  }
+
+  private apply(left: number, top: number, width: number, height: number): CssRect {
     // 정수 px에 맞춰야 캔버스가 흐려지지 않는다.
-    const x = Math.round(feetX - width / 2);
-    const y = Math.round(feetY + characterHeight * shape.footPadRatio - height);
+    const x = Math.round(left);
+    const y = Math.round(top);
     this.rect = { x, y, width, height };
 
     const size = `${width}x${height}`;

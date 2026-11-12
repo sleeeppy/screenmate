@@ -39,14 +39,16 @@ async function boot(target: HTMLCanvasElement): Promise<void> {
 
   stage.setHeight(settings.heightPx);
 
-  // 모션: 실행 옵션(--motion)이 있으면 그것부터, 트레이에서 미리보기로 바꿀 수 있다.
+  // 기본은 자율 행동. 실행 옵션(--motion)이 있거나 트레이에서 고르면 그 모션만 미리보기한다.
   const options = await launchOptions();
   stage.benchIdle = options.benchIdle;
-  const startMotion = options.motion ?? "idle";
-  stage.playMotion(startMotion);
+  if (options.motion) stage.playMotion(options.motion);
   const syncMotionMenu = () =>
     void registerMotions(
-      MOTIONS.map((motion) => ({ name: motion.name, label: motion.label })),
+      [
+        { name: "auto", label: "자동 (행동)" },
+        ...MOTIONS.map((motion) => ({ name: motion.name, label: motion.label })),
+      ],
       stage.currentMotion,
     );
   syncMotionMenu();

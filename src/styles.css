@@ -12,6 +12,14 @@ body {
   display: block;
   width: 1px;
   height: 1px;
+  /* 캐릭터를 클릭하면 캔버스가 포커스를 받아 사각형 포커스 링이 그려진다 */
+  outline: none;
+  touch-action: none;
+}
+
+#stage:focus,
+#stage:focus-visible {
+  outline: none;
 }
 
 #hint {
