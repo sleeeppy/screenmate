@@ -9,14 +9,21 @@ import { Scene } from "@babylonjs/core/scene";
 import { SdefInjector } from "babylon-mmd/esm/Loader/sdefInjector";
 import { diag, onCursor, type CursorEvent, type ModelListing, type StageInfo } from "../ipc";
 import { createMmdWorld, loadCharacter, type LoadedCharacter, type MmdWorld } from "../mmd/loadModel";
+import { idle, motionByName } from "../motion/clips/index.ts";
+import type { GazeTarget } from "../motion/layers";
 import { aimAtBox, createStageCamera } from "./camera";
 import { FollowBox } from "./followBox";
-import { FramePacer } from "./framePacer";
+import { FramePacer, type Activity } from "./framePacer";
 import { HitTester } from "./hitTest";
 import { StageSpace } from "./space";
 
 /** 모델을 바꾸거나 텔레포트한 뒤 물리가 가라앉을 때까지 활성 fps를 유지하는 시간 */
 const SETTLE_MS = 2500;
+/** 걷기 미리보기 때 몸 방향: 화면 오른쪽(+x)으로 걷는 3/4 측면 */
+const WALK_PREVIEW_FACING = (-70 * Math.PI) / 180;
+const LIGHT = { direction: [0.55, -0.8, 0.75] as [number, number, number], key: 0.78, fill: 0.18 };
+/** 키 260px일 때 윤곽선 배율 (모델 edgeSize 기준) */
+const OUTLINE_SCALE = 0.45;
 /** 업로드할 텍스처의 최대 한 변 길이 */
 const MAX_TEXTURE_SIZE = 1024;
 
@@ -26,7 +33,7 @@ export class Stage {
   private readonly camera;
   private readonly box: FollowBox;
   private readonly hit: HitTester;
-  private readonly pacer = new FramePacer(60, 30);
+  private readonly pacer = new FramePacer();
   private readonly space: StageSpace;
   private world: MmdWorld | null = null;
   private character: LoadedCharacter | null = null;
@@ -38,6 +45,11 @@ export class Stage {
   heightPx = 260;
   /** 발 위치 CSS px (M4에서 행동 시스템이 움직인다) */
   feet = { x: 0, y: 0 };
+  /** 몸 방향 (라디안, 0 = 정면). Y+ 회전은 모델의 오른쪽(화면 왼쪽)으로 돈다. */
+  facing = 0;
+  private motionName = "idle";
+  /** 성능 측정용: 커서를 무시하고 대기 fps로 고정 (`--bench-idle`) */
+  benchIdle = false;
 
   constructor(
     private readonly canvas: HTMLCanvasElement,
@@ -60,14 +72,16 @@ export class Stage {
     this.scene.clearColor = new Color4(0, 0, 0, 0);
     this.scene.skipPointerMovePicking = true;
     this.camera = createStageCamera(this.scene);
-    // babylon-mmd 권장 조명 (MMD 기본 시점 기준). 툰 텍스처가 없는 옛 PMD가 하얗게 날아가지 않는다.
+    // 조명: 빛을 화면 왼쪽 위 비스듬히(모델 기준 오른쪽 위 앞)에서 넣어 툰 음영 경계가 보이게 한다.
+    // 정면 빛은 MMD와 밝기는 같지만 그림자 쪽이 안 생겨 옛 PMD가 납작하고 하얗게 보였다.
+    // 보조광(반구광)은 평평하게 만드는 쪽이라 약하게.
     this.scene.ambientColor = new Color3(0.5, 0.5, 0.5);
     const fill = new HemisphericLight("fill", new Vector3(0, 1, 0), this.scene);
-    fill.intensity = 0.3;
+    fill.intensity = LIGHT.fill;
     fill.specular.set(0, 0, 0);
     fill.groundColor.set(1, 1, 1);
-    const key = new DirectionalLight("key", new Vector3(0.5, -1, 1), this.scene);
-    key.intensity = 0.7;
+    const key = new DirectionalLight("key", new Vector3(...LIGHT.direction), this.scene);
+    key.intensity = LIGHT.key;
 
     this.space = new StageSpace(info.height, 1);
     this.box = new FollowBox(canvas, () => this.engine.resize());
@@ -75,7 +89,7 @@ export class Stage {
     this.placeOnGround();
 
     void onCursor((event) => {
-      this.cursor = event.near ? event : null;
+      this.cursor = event.near && !this.benchIdle ? event : null;
     });
     window.addEventListener("resize", () => this.engine.resize());
     this.startLoop();
@@ -98,9 +112,18 @@ export class Stage {
     // 월드 배율이 바뀌면 같은 화면 위치라도 월드 좌표가 달라진다 = 순간이동.
     // 새 위치를 반영한 뒤 강체를 다시 놓는다.
     this.syncCharacter();
+    this.applyOutline();
     this.character?.mesh.computeWorldMatrix(true);
     this.character?.resetPhysics();
     this.wake();
+  }
+
+  /**
+   * 윤곽선은 화면 픽셀 기준 두께(edgeSize × 약 2px)라서 캐릭터가 작을수록 상대적으로 두꺼워 보인다.
+   * MMD처럼 캐릭터가 화면을 채울 때의 비율에 맞춰 키에 비례해 줄인다.
+   */
+  private applyOutline(): void {
+    this.character?.setOutlineScale(OUTLINE_SCALE * (this.heightPx / 260));
   }
 
   /** 모델을 불러온다. 연속 호출되면 마지막 요청만 반영한다. */
@@ -114,7 +137,8 @@ export class Stage {
         this.feet.y,
       );
       mesh.position.set(world.x, world.y, 0);
-    });
+      mesh.rotation.y = this.facing;
+    }, { gaze: () => this.gazeTarget() });
     if (token !== this.loadToken) {
       loaded.dispose();
       return null;
@@ -123,8 +147,55 @@ export class Stage {
     this.character = loaded;
     this.hit.release();
     this.syncCharacter();
+    this.applyOutline();
+    this.playMotion(this.motionName);
     this.wake();
+    // 모델 간 자세 차이 확인용: 모션이 자리 잡은 뒤 실제 팔 각도를 남긴다.
+    window.setTimeout(() => {
+      if (this.character === loaded) diag(`pose ${loaded.entry.id} ${armAngles(loaded)}`);
+    }, 3000);
     return loaded;
+  }
+
+  /**
+   * 모션 재생. 한 번 재생하는 모션(착지 등)은 끝나면 idle로 돌아간다.
+   * 걷기는 정면에서 보면 다리가 앞뒤로만 움직여 안 보이므로 몸을 옆으로 돌린다 (M4에서 이동 방향으로).
+   */
+  playMotion(name: string): void {
+    const motion = motionByName(name) ?? idle;
+    const changed = motion.name !== this.motionName;
+    this.motionName = motion.name;
+    this.facing = motion.name === "walk" ? WALK_PREVIEW_FACING : 0;
+    this.character?.motion.play(motion, {
+      restart: true,
+      onFinished: motion.loop ? undefined : () => this.playMotion("idle"),
+    });
+    this.wake();
+    if (this.character) diag(`motion ${motion.name}`);
+    if (changed) this.onMotionChanged?.();
+  }
+
+  get currentMotion(): string {
+    return this.motionName;
+  }
+
+  /** 모션이 바뀌었을 때 (트레이 체크 표시 갱신용) */
+  onMotionChanged: (() => void) | null = null;
+
+  /** 커서를 머리 기준 모델 로컬 좌표로. 커서가 멀면 null (정면 응시). */
+  private gazeTarget(): GazeTarget | null {
+    const character = this.character;
+    const cursor = this.cursor;
+    if (!character || !cursor) {
+      return null;
+    }
+    const world = this.space.toWorld(cursor.x, cursor.y);
+    const head = character.mesh.position;
+    // 몸을 돌리고 있으면 화면 가로 거리가 모델 로컬 x로는 cos만큼 줄어든다.
+    return {
+      dx: (world.x - head.x) * Math.cos(this.facing),
+      dy: world.y - (head.y + character.calibration.headY),
+    };
   }
 
   unload(): void {
@@ -152,6 +223,7 @@ export class Stage {
     this.space.pixelsPerUnit = this.heightPx / character.calibration.headY;
     const world = this.space.toWorld(this.feet.x, this.feet.y);
     character.mesh.position.set(world.x, world.y, 0);
+    character.mesh.rotation.y = this.facing;
     const rect = this.box.update(this.feet.x, this.feet.y, this.heightPx);
     aimAtBox(this.camera, rect, this.space);
   }
@@ -167,9 +239,10 @@ export class Stage {
     let stamp = performance.now();
     const loop = (now: number) => {
       requestAnimationFrame(loop);
-      const active = this.cursor !== null || this.hit.capturing || now < this.activeUntil;
+      const activity: Activity =
+        this.hit.capturing || now < this.activeUntil ? "interact" : this.cursor !== null ? "near" : "idle";
       // 캐릭터가 없으면 그릴 것도 없다 (vsync 간격 측정만 계속)
-      if (!this.pacer.tick(now, active) || !this.character) {
+      if (!this.pacer.tick(now, activity) || !this.character) {
         return;
       }
       this.syncCharacter();
@@ -184,7 +257,7 @@ export class Stage {
         const seconds = (now - stamp) / 1000;
         diag(
           `fps=${(frames / seconds).toFixed(1)} render=${(renderMs / Math.max(1, frames)).toFixed(2)}ms ` +
-            `active=${active} hz=${this.pacer.refreshRate} canvas=${this.canvas.width}x${this.canvas.height}`,
+            `activity=${activity} hz=${this.pacer.refreshRate} canvas=${this.canvas.width}x${this.canvas.height} motion=${this.motionName}`,
         );
         frames = 0;
         renderMs = 0;
@@ -193,4 +266,20 @@ export class Stage {
     };
     requestAnimationFrame(loop);
   }
+}
+
+/** 현재 자세의 팔 각도 (수평에서 아래로, 도). 모델 간 모션 결과 비교용. */
+function armAngles(character: LoadedCharacter): string {
+  const position = (name: string) => {
+    const bone = character.model.runtimeBones.find((candidate) => candidate.name === name);
+    return bone ? bone.getWorldTranslationToRef(new Vector3()) : null;
+  };
+  const angle = (side: "左" | "右") => {
+    const shoulder = position(`${side}腕`);
+    const elbow = position(`${side}ひじ`);
+    if (!shoulder || !elbow) return "?";
+    const dx = Math.hypot(elbow.x - shoulder.x, elbow.z - shoulder.z);
+    return ((Math.atan2(shoulder.y - elbow.y, dx) * 180) / Math.PI).toFixed(1);
+  };
+  return `armDown=${angle("左")}/${angle("右")}`;
 }

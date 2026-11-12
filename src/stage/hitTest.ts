@@ -1,5 +1,5 @@
 import type { Engine } from "@babylonjs/core/Engines/engine";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { invoke } from "@tauri-apps/api/core";
 import type { FollowBox } from "./followBox";
 
 const HIT_ALPHA = 16;
@@ -10,7 +10,6 @@ const MISS_FRAMES = 2;
  * 기본은 통과(아래 창이 클릭을 받음). 캐릭터 픽셀 위에서만 입력을 받는다.
  */
 export class HitTester {
-  private readonly appWindow = getCurrentWindow();
   private ignoring = true;
   private pressed = false;
   private misses = 0;
@@ -89,7 +88,8 @@ export class HitTester {
       return;
     }
     this.ignoring = next;
-    void this.appWindow.setIgnoreCursorEvents(next);
+    // Rust 쪽에서 전환 후 창 스타일(포커스 안 뺏기·Alt+Tab 숨김)을 다시 붙인다.
+    void invoke("set_click_through", { ignore: next });
   }
 }
 

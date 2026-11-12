@@ -8,7 +8,10 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "test": "node --test \"src/**/*.test.ts\"",
+    "export-vmd": "node tools/export-vmd.ts",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@babylonjs/core": "^9.36.0",
@@ -17,6 +20,7 @@
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.12.4",
+    "@types/node": "^24.19.2",
     "typescript": "~5.9.3",
     "vite": "^8.3.8"
   }

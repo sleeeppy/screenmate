@@ -24,7 +24,7 @@ npm run tauri dev
 - 또는 명령줄로 한 번에:
 
 ```bash
-npm run tauri dev -- -- --import "models/DIVA風水着セット" "models/Sour式鏡音リン・レンVer.2.01" "models/YYB式鏡音レンver1.00" "models/Lat_Kagamine_Len_v1.3"
+npm run tauri dev -- -- --import "models/DIVA風水着セット" "models/Sour式鏡音リン・レンVer.2.01" "models/YYB式鏡音レンver1.00"
 ```
 
 앱 데이터 위치: Windows `%APPDATA%\dev.sleeeppy.screenmate`, macOS `~/Library/Application Support/dev.sleeeppy.screenmate`.

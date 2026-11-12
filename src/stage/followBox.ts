@@ -19,8 +19,8 @@ export interface BoxShape {
 
 export const STANDING_BOX: BoxShape = { widthRatio: 1.35, heightRatio: 1.5, footPadRatio: 0.06 };
 
-/** 관심 영역 = 상자 + 이 여백. 이 안에서만 Rust가 커서 위치를 보낸다. */
-const INTEREST_MARGIN = 160;
+/** 관심 영역 = 상자 + 이 여백. 이 안에서만 Rust가 커서 위치를 보낸다 (시선 추적 범위). */
+const INTEREST_MARGIN = 320;
 /** 관심 영역 갱신 최소 이동량 (IPC 줄이기) */
 const INTEREST_STEP = 24;
 

@@ -24,7 +24,8 @@
         "skipTaskbar": true,
         "visible": false,
         "noRedirectionBitmap": true,
-        "focus": false
+        "focus": false,
+        "focusable": false
       }
     ],
     "security": {

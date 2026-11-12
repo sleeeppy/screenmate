@@ -4,6 +4,7 @@ import type { Mesh } from "@babylonjs/core/Meshes/mesh";
 import type { Scene } from "@babylonjs/core/scene";
 import "babylon-mmd/esm/Loader/mmdModelLoader";
 import "babylon-mmd/esm/Loader/mmdOutlineRenderer";
+import { MmdStandardMaterial } from "babylon-mmd/esm/Loader/mmdStandardMaterial";
 import type { MmdModelMetadata } from "babylon-mmd/esm/Loader/mmdModelMetadata";
 import "babylon-mmd/esm/Loader/pmdLoader";
 import "babylon-mmd/esm/Loader/pmxLoader";
@@ -15,9 +16,11 @@ import type { MmdModel } from "babylon-mmd/esm/Runtime/mmdModel";
 import { MmdRuntime } from "babylon-mmd/esm/Runtime/mmdRuntime";
 import { MmdStandardMaterialProxy } from "babylon-mmd/esm/Runtime/mmdStandardMaterialProxy";
 import { mateUrl, type ModelListing } from "../ipc";
+import { MotionDriver, type DriverInputs } from "../motion/driver";
 import { createProceduralSlot } from "../motion/proceduralSlot";
 import { calibrate, type Calibration } from "./calibration";
 import { resolveMorphs, type ResolvedMorphs } from "./morphMap";
+import { presetOverrides } from "./presets";
 import { applyOverrides, readOverrides } from "./profile";
 
 /** 장면당 하나: MMD 런타임과 Bullet 물리 */
@@ -54,7 +57,11 @@ export interface LoadedCharacter {
   computedMorphs: ResolvedMorphs;
   morphNames: string[];
   loadMs: number;
+  /** 모션 재생기 */
+  motion: MotionDriver;
   resetPhysics(): void;
+  /** 윤곽선 두께 배율 (모델 edgeSize 기준). 프로필 overrides.edgeScale이 곱해진다. */
+  setOutlineScale(scale: number): void;
   dispose(): void;
 }
 
@@ -67,6 +74,7 @@ export async function loadCharacter(
   scene: Scene,
   entry: ModelListing,
   place: (mesh: Mesh, calibration: Calibration) => void,
+  inputs: DriverInputs,
 ): Promise<LoadedCharacter> {
   const started = performance.now();
   const url = mateUrl(`models/${entry.file}`);
@@ -91,8 +99,15 @@ export async function loadCharacter(
   const morphNames = ((mesh.metadata as MmdModelMetadata | null)?.morphs ?? []).map((morph) => morph.name);
   const computedCalibration = calibrate(skeleton);
   const computedMorphs = resolveMorphs(morphNames);
-  const overrides = readOverrides(entry.profile);
+  const overrides = { ...presetOverrides(entry.id), ...readOverrides(entry.profile) };
   const { calibration, morphs } = applyOverrides(computedCalibration, computedMorphs, overrides);
+
+  // 재질 프록시가 생성 시점 값을 기준으로 재질 모프를 되돌리므로 런타임 모델보다 먼저 바꾼다.
+  if (overrides.ambientScale !== undefined && overrides.ambientScale !== 1) {
+    for (const material of container.materials) {
+      if (material instanceof MmdStandardMaterial) material.ambientColor.scaleInPlace(overrides.ambientScale);
+    }
+  }
 
   place(mesh, calibration);
   mesh.computeWorldMatrix(true);
@@ -100,7 +115,23 @@ export async function loadCharacter(
     materialProxyConstructor: MmdStandardMaterialProxy,
     buildPhysics: overrides.physics ?? true,
   });
-  model.setRuntimeAnimation(model.createRuntimeAnimation(createProceduralSlot(morphs)));
+  let driver: MotionDriver | null = null;
+  const slot = createProceduralSlot((runtimeModel) => {
+    driver = new MotionDriver(runtimeModel, calibration, morphs, inputs);
+    return driver;
+  });
+  model.setRuntimeAnimation(model.createRuntimeAnimation(slot));
+  if (!driver) {
+    container.dispose();
+    throw new Error(`${entry.name}: 모션 드라이버를 만들지 못했습니다`);
+  }
+
+  // 윤곽선 기본 두께(모델이 정한 edgeSize)를 기억해 두고 화면 크기에 맞춰 줄인다.
+  const outlines = container.materials
+    .filter((material): material is MmdStandardMaterial => material instanceof MmdStandardMaterial)
+    .filter((material) => material.renderOutline)
+    .map((material) => ({ material, base: material.outlineWidth }));
+  const edgeScale = overrides.edgeScale ?? 1;
 
   return {
     entry,
@@ -112,7 +143,11 @@ export async function loadCharacter(
     computedMorphs,
     morphNames,
     loadMs: Math.round(performance.now() - started),
+    motion: driver,
     resetPhysics: () => model.initializePhysics(),
+    setOutlineScale: (scale) => {
+      for (const { material, base } of outlines) material.outlineWidth = base * scale * edgeScale;
+    },
     dispose: () => {
       world.runtime.destroyMmdModel(model);
       container.dispose();

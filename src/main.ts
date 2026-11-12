@@ -1,7 +1,10 @@
 import {
   diag,
   getSettings,
+  launchOptions,
   listModels,
+  onMotionPreview,
+  registerMotions,
   onModelsChanged,
   onReload,
   onSettingsChanged,
@@ -12,6 +15,7 @@ import {
 } from "./ipc";
 import type { LoadedCharacter } from "./mmd/loadModel";
 import { readOverrides, type ModelProfile } from "./mmd/profile";
+import { MOTIONS } from "./motion/clips/index.ts";
 import { Stage } from "./stage/engine";
 import "./styles.css";
 
@@ -34,6 +38,23 @@ async function boot(target: HTMLCanvasElement): Promise<void> {
   let loadedId: string | null = null;
 
   stage.setHeight(settings.heightPx);
+
+  // 모션: 실행 옵션(--motion)이 있으면 그것부터, 트레이에서 미리보기로 바꿀 수 있다.
+  const options = await launchOptions();
+  stage.benchIdle = options.benchIdle;
+  const startMotion = options.motion ?? "idle";
+  stage.playMotion(startMotion);
+  const syncMotionMenu = () =>
+    void registerMotions(
+      MOTIONS.map((motion) => ({ name: motion.name, label: motion.label })),
+      stage.currentMotion,
+    );
+  syncMotionMenu();
+  void onMotionPreview((name) => {
+    stage.playMotion(name);
+    syncMotionMenu();
+  });
+  stage.onMotionChanged = syncMotionMenu;
 
   const selected = (): ModelListing | undefined =>
     models.find((entry) => entry.id === settings.modelId) ?? models[0];
