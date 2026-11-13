@@ -15,6 +15,7 @@ pub fn run() {
         .register_asynchronous_uri_scheme_protocol("mate", models::handle_protocol)
         .invoke_handler(tauri::generate_handler![
             overlay::set_interest_rect,
+            overlay::set_click_through,
             overlay::stage_info,
             models::list_models,
             models::save_model_cache,
@@ -22,11 +23,14 @@ pub fn run() {
             models::clear_model_cache,
             settings::get_settings,
             settings::select_model,
+            tray::register_motions,
+            launch_options,
             diag,
         ])
         .setup(|app| {
             let handle = app.handle().clone();
             app.manage(settings::SettingsState(Mutex::new(settings::load(&handle))));
+            app.manage(tray::MotionMenu::default());
 
             // `screenmate --import <폴더> [<폴더> ...]`: 시작할 때 폴더를 가져온다.
             for folder in import_arguments() {
@@ -51,6 +55,26 @@ pub fn run() {
 #[tauri::command]
 fn diag(message: String) {
     println!("diag {message}");
+}
+
+#[derive(serde::Serialize)]
+struct LaunchOptions {
+    /// `--motion <이름>`: 시작할 때 재생할 모션 (미리보기·검증용)
+    motion: Option<String>,
+    /// `--bench-idle`: 커서를 무시하고 대기 fps로 고정 (성능 측정용)
+    #[serde(rename = "benchIdle")]
+    bench_idle: bool,
+}
+
+#[tauri::command]
+fn launch_options() -> LaunchOptions {
+    let arguments: Vec<String> = std::env::args().collect();
+    let motion = arguments
+        .iter()
+        .position(|argument| argument == "--motion")
+        .and_then(|index| arguments.get(index + 1).cloned());
+    let bench_idle = arguments.iter().any(|argument| argument == "--bench-idle");
+    LaunchOptions { motion, bench_idle }
 }
 
 fn import_arguments() -> Vec<PathBuf> {

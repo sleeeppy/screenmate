@@ -22,6 +22,11 @@ const ALIASES: Record<Emotion, readonly Candidate[]> = {
   mouthA: [[["あ", 1]]],
 };
 
+/** 감정마다 가장 흔한 모프 이름 (VMD 내보내기용: MMD 표준 표정 이름) */
+export const DEFAULT_MORPH_NAMES: Record<Emotion, string> = Object.fromEntries(
+  Object.entries(ALIASES).map(([emotion, candidates]) => [emotion, candidates[0][0][0]]),
+) as Record<Emotion, string>;
+
 export type ResolvedMorphs = Partial<Record<Emotion, [name: string, weight: number][]>>;
 
 export function normalizeMorphName(name: string): string {

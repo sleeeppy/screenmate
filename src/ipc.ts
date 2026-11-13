@@ -52,6 +52,15 @@ export const onReload = (handler: () => void): Promise<UnlistenFn> => listen("re
 
 export const stageInfo = (): Promise<StageInfo> => invoke("stage_info");
 
+export const launchOptions = (): Promise<{ motion: string | null; benchIdle: boolean }> => invoke("launch_options");
+
+/** 트레이 "모션 미리보기" 메뉴를 채운다. */
+export const registerMotions = (items: { name: string; label: string }[], current: string | null): Promise<void> =>
+  invoke("register_motions", { items, current });
+
+export const onMotionPreview = (handler: (name: string) => void): Promise<UnlistenFn> =>
+  listen<string>("motion-preview", (event) => handler(event.payload));
+
 /** 진단 로그를 Rust 표준 출력으로 보낸다 (개발 중 성능 측정용) */
 export function diag(message: string): void {
   void invoke("diag", { message }).catch(() => {});

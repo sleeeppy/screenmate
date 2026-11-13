@@ -13,6 +13,27 @@ use crate::models::{self, ModelEntry};
 use crate::settings::{self, SettingsState};
 
 const TRAY_ID: &str = "main";
+
+/// 웹뷰가 알려준 모션 목록 (트레이 "모션 미리보기" 메뉴)
+#[derive(Clone, serde::Deserialize)]
+pub struct MotionItem {
+    name: String,
+    label: String,
+}
+
+#[derive(Default)]
+pub struct MotionMenu {
+    items: std::sync::Mutex<Vec<MotionItem>>,
+    current: std::sync::Mutex<Option<String>>,
+}
+
+#[tauri::command]
+pub fn register_motions(app: AppHandle, items: Vec<MotionItem>, current: Option<String>) {
+    let state = app.state::<MotionMenu>();
+    *state.items.lock().unwrap() = items;
+    *state.current.lock().unwrap() = current;
+    refresh(&app);
+}
 const SIZES: &[(&str, f64)] = &[("작게", 200.0), ("보통", 260.0), ("크게", 340.0)];
 
 pub fn install(app: &AppHandle) -> tauri::Result<()> {
@@ -78,7 +99,19 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         );
     }
 
+    let motions = app.state::<MotionMenu>();
+    let current_motion = motions.current.lock().unwrap().clone();
+    let mut preview = SubmenuBuilder::new(app, "모션 미리보기");
+    for item in motions.items.lock().unwrap().iter() {
+        preview = preview.item(
+            &CheckMenuItemBuilder::with_id(format!("motion:{}", item.name), &item.label)
+                .checked(current_motion.as_deref() == Some(item.name.as_str()))
+                .build(app)?,
+        );
+    }
+
     menu.item(&PredefinedMenuItem::separator(app)?)
+        .item(&preview.build()?)
         .item(&MenuItemBuilder::with_id("import", "모델 가져오기…").build(app)?)
         .item(&MenuItemBuilder::with_id("open-folder", "모델 폴더 열기").build(app)?)
         .item(&size.build()?)
@@ -90,7 +123,9 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
 
 fn on_menu_event(app: &AppHandle, event: MenuEvent) {
     let id = event.id().as_ref();
-    if let Some(model_id) = id.strip_prefix("model:") {
+    if let Some(motion) = id.strip_prefix("motion:") {
+        let _ = app.emit("motion-preview", motion);
+    } else if let Some(model_id) = id.strip_prefix("model:") {
         let _ = settings::select_model(app.clone(), model_id.to_string());
     } else if let Some(height) = id.strip_prefix("size:").and_then(|value| value.parse::<f64>().ok()) {
         let _ = settings::update(app, |settings| settings.height_px = height);

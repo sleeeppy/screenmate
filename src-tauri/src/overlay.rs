@@ -65,8 +65,8 @@ pub fn install(app: &AppHandle, window: &WebviewWindow) -> tauri::Result<()> {
     app.manage(state.clone());
 
     fit_primary_monitor(window)?;
-    hide_window_chrome(window);
     window.set_ignore_cursor_events(true)?;
+    reapply_window_chrome(window);
     refresh_geometry(window, &state);
 
     let event_window = window.clone();
@@ -200,6 +200,24 @@ fn poll_cursor(app: AppHandle, state: Arc<OverlayState>) {
         last_point = Some((point_x, point_y));
         was_near = near;
     }
+}
+
+/// 클릭 통과 켜기/끄기.
+///
+/// tao는 이 전환 때마다 확장 스타일을 처음부터 다시 계산해서 우리가 붙인 스타일
+/// (Alt+Tab 숨김, 테두리 없음)을 지운다. 그래서 전환 직후 같은 메인 스레드 큐에서 다시 붙인다.
+/// 포커스를 뺏지 않는 WS_EX_NOACTIVATE는 tauri.conf.json의 `focusable: false`로 tao가 유지한다.
+#[tauri::command]
+pub fn set_click_through(window: WebviewWindow, ignore: bool) -> Result<(), String> {
+    window.set_ignore_cursor_events(ignore).map_err(|error| error.to_string())?;
+    reapply_window_chrome(&window);
+    Ok(())
+}
+
+/// 메인 스레드에서 창 스타일을 다시 붙인다 (tao의 스타일 갱신 뒤에 실행되도록 같은 큐에 넣음).
+fn reapply_window_chrome(window: &WebviewWindow) {
+    let target = window.clone();
+    let _ = window.run_on_main_thread(move || hide_window_chrome(&target));
 }
 
 /// 캐릭터 주변 관심 영역. 이 영역 안에서만 커서 위치를 받는다.
