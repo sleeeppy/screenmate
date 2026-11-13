@@ -37,6 +37,8 @@ const LEDGE = { headroom: 1.1, minWidth: 0.45 };
  * 옮겨 화면에는 그대로 보이게 한다. 관성으로 펄럭이는 느낌은 남는다. 회전(흔들림·몸 방향)은 그대로.
  */
 const PHYSICS_TRAVEL = 0.15;
+/** 기준점이 가슴 ↔ 잡은 점으로 바뀔 때 물리 위치가 튀지 않게 발 기준 오프셋을 이 반감기(초)로 옮긴다 */
+const PIVOT_BLEND = 0.12;
 /** 업로드할 텍스처의 최대 한 변 길이 */
 const MAX_TEXTURE_SIZE = 1024;
 
@@ -56,6 +58,8 @@ export class Stage {
   private windows: WindowRect[] = [];
   private ledges: Ledge[] = [];
   private platformFast = false;
+  /** 발 → 물리 기준점 (CSS px, 부드럽게 따라감). null이면 다음 프레임에 바로 맞춘다. */
+  private pivotOffset: { x: number; y: number } | null = null;
   private activeUntil = 0;
 
   /** 캐릭터 키(頭 본 높이) CSS px */
@@ -148,6 +152,7 @@ export class Stage {
   updateInfo(info: StageInfo): void {
     this.info = info;
     this.space.stageHeight = info.height;
+    this.pivotOffset = null;
     this.updateLedges();
     this.behavior.fit(this.arena());
     this.syncCharacter();
@@ -160,6 +165,7 @@ export class Stage {
       return;
     }
     this.heightPx = heightPx;
+    this.pivotOffset = null;
     this.updateLedges();
     // 월드 배율이 바뀌면 같은 화면 위치라도 월드 좌표가 달라진다 = 순간이동.
     // 새 위치를 반영한 뒤 강체를 다시 놓는다.
@@ -188,7 +194,9 @@ export class Stage {
         this.behavior.feet.x,
         this.behavior.feet.y,
       );
-      mesh.position.set(world.x * PHYSICS_TRAVEL, world.y * PHYSICS_TRAVEL, 0);
+      this.pivotOffset = null;
+      const pivot = this.physicsPivot();
+      mesh.position.set(world.x + pivot.x * (PHYSICS_TRAVEL - 1), world.y + pivot.y * (PHYSICS_TRAVEL - 1), 0);
       mesh.rotation.set(0, this.behavior.facing, this.behavior.roll);
     }, {
       gaze: () => this.gazeTarget(),
@@ -303,6 +311,31 @@ export class Stage {
     this.behavior.drag({ x: centerX + 220 * swing, y }, now);
   }
 
+  /** 물리 기준점 (월드 단위). 발 + 부드럽게 따라가는 오프셋. */
+  private physicsPivot(): { x: number; y: number } {
+    const { feet } = this.behavior;
+    const offset = this.pivotOffset ?? this.targetPivotOffset();
+    return this.space.toWorld(feet.x + offset.x, feet.y + offset.y);
+  }
+
+  private targetPivotOffset(): { x: number; y: number } {
+    const { pivot, feet } = this.behavior;
+    return { x: pivot.x - feet.x, y: pivot.y - feet.y };
+  }
+
+  private blendPivot(dt: number): void {
+    const target = this.targetPivotOffset();
+    if (!this.pivotOffset) {
+      this.pivotOffset = target;
+      return;
+    }
+    const keep = Math.pow(0.5, dt / PIVOT_BLEND);
+    this.pivotOffset = {
+      x: target.x + (this.pivotOffset.x - target.x) * keep,
+      y: target.y + (this.pivotOffset.y - target.y) * keep,
+    };
+  }
+
   /** 창 위에 있을 때만 Rust 창 폴링을 빠르게 */
   private syncPlatformRate(): void {
     const fast = this.behavior.onLedge;
@@ -359,7 +392,9 @@ export class Stage {
     this.space.pixelsPerUnit = this.heightPx / character.calibration.headY;
     const { feet, facing, roll } = this.behavior;
     const world = this.space.toWorld(feet.x, feet.y);
-    const offset = { x: world.x * (PHYSICS_TRAVEL - 1), y: world.y * (PHYSICS_TRAVEL - 1) };
+    // 몸이 매달린 기준점(behavior.pivot)의 이동만 줄이고, 그 점을 중심으로 한 회전은 그대로 둔다.
+    const pivot = this.physicsPivot();
+    const offset = { x: pivot.x * (PHYSICS_TRAVEL - 1), y: pivot.y * (PHYSICS_TRAVEL - 1) };
     character.mesh.position.set(world.x + offset.x, world.y + offset.y, 0);
     character.mesh.rotation.set(0, facing, roll);
     let rect;
@@ -399,6 +434,7 @@ export class Stage {
       this.lastFrame = now;
       if (this.demoHang) this.driveDemoHang(now);
       this.behavior.update(dt, this.arena());
+      this.blendPivot(dt);
       this.syncPlatformRate();
       this.syncCharacter();
       const before = performance.now();
