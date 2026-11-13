@@ -13,7 +13,7 @@ import { Behavior, rotateCss, type Arena } from "../behavior/behavior.ts";
 import { attachPointer } from "../behavior/interaction";
 import { computeLedges, type Ledge, type WindowRect } from "../behavior/platforms.ts";
 import { idle, motionByName } from "../motion/clips/index.ts";
-import { WALK_SPEED_UNITS } from "../motion/clips/walk.ts";
+import { isPassingFrame, WALK_SPEED_UNITS } from "../motion/clips/walk.ts";
 import type { GazeTarget } from "../motion/layers";
 import { aimAtBox, createStageCamera } from "./camera";
 import { FollowBox } from "./followBox";
@@ -39,6 +39,8 @@ const LEDGE = { headroom: 1.1, minWidth: 0.45 };
 const PHYSICS_TRAVEL = 0.15;
 /** 기준점이 가슴 ↔ 잡은 점으로 바뀔 때 물리 위치가 튀지 않게 발 기준 오프셋을 이 반감기(초)로 옮긴다 */
 const PIVOT_BLEND = 0.12;
+/** 새 모델을 보여 주기 전에 물리가 자리 잡도록 숨겨 두는 시간 */
+const REVEAL_DELAY_MS = 350;
 /** 업로드할 텍스처의 최대 한 변 길이 */
 const MAX_TEXTURE_SIZE = 1024;
 
@@ -125,6 +127,11 @@ export class Stage {
         return stage.walkSpeedPx();
       },
       play: (motion, onFinished) => this.playClip(motion, onFinished),
+      canStopWalking: () => {
+        const motion = this.character?.motion;
+        const frame = motion?.currentFrame ?? null;
+        return motion?.current?.name !== "walk" || frame === null || isPassingFrame(frame);
+      },
     });
     this.behavior.place(info.workArea.x + info.workArea.width / 2, this.arena());
     attachPointer({
@@ -189,13 +196,14 @@ export class Stage {
     const token = ++this.loadToken;
     this.world ??= await createMmdWorld(this.scene);
     const loaded = await loadCharacter(this.world, this.scene, entry, (mesh, calibration) => {
-      // 강체가 만들어지기 전에 최종 위치에 둔다.
-      const world = new StageSpace(this.space.stageHeight, this.heightPx / calibration.headY).toWorld(
-        this.behavior.feet.x,
-        this.behavior.feet.y,
-      );
+      // 강체가 만들어지기 전에 최종 위치에 둔다. 위치와 물리 기준점 모두 새 모델의 배율로 계산해야 한다
+      // (예전엔 기준점을 이전 모델 배율로 구해 첫 프레임에 순간이동 → 리본·넥타이가 화면을 가로질러 늘어났다).
+      const space = new StageSpace(this.space.stageHeight, this.heightPx / calibration.headY);
+      const { feet } = this.behavior;
+      const world = space.toWorld(feet.x, feet.y);
       this.pivotOffset = null;
-      const pivot = this.physicsPivot();
+      const offset = this.targetPivotOffset();
+      const pivot = space.toWorld(feet.x + offset.x, feet.y + offset.y);
       mesh.position.set(world.x + pivot.x * (PHYSICS_TRAVEL - 1), world.y + pivot.y * (PHYSICS_TRAVEL - 1), 0);
       mesh.rotation.set(0, this.behavior.facing, this.behavior.roll);
     }, {
@@ -209,7 +217,17 @@ export class Stage {
     this.character?.dispose();
     this.character = loaded;
     this.hit.release();
+    // 텍스처·셰이더가 준비되고 물리가 자리 잡을 때까지 숨긴다 (텍스처가 하나씩 뜨고 치마·머리카락이 쏟아지는 걸 안 보이게).
+    loaded.setVisible(false);
     this.syncCharacter();
+    loaded.mesh.computeWorldMatrix(true);
+    loaded.resetPhysics();
+    void Promise.all([loaded.ready, new Promise((resolve) => window.setTimeout(resolve, REVEAL_DELAY_MS))]).then(() => {
+      if (this.character === loaded) {
+        loaded.setVisible(true);
+        this.wake();
+      }
+    });
     this.applyOutline();
     this.playClip(this.behavior.paused ? this.motionName : "idle");
     this.wake();

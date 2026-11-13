@@ -256,3 +256,32 @@ test("창 끝에서 헛디디면 떨어진다", () => {
 function run2(behavior: Behavior, seconds: number, where: Arena, step = 1 / 60): void {
   for (let t = 0; t < seconds; t += step) behavior.update(step, where);
 }
+
+test("걷다 멈출 때는 두 발이 엇갈리는 순간까지 마저 걷는다 (최대 0.6초)", () => {
+  const { actor, played } = makeActor();
+  let passing = false;
+  actor.canStopWalking = () => passing;
+  // 대기 3초(0), 방향 오른쪽(0.1), 걷기 길이 최소 2초(0)
+  const behavior = new Behavior(actor, sequence(0, 0.1, 0, 0.9));
+  behavior.place(500, arena);
+  run(behavior, 3.1);
+  assert.equal(behavior.state, "walk");
+  run(behavior, 2.1); // 걷기 시간은 끝났지만 아직 발이 엇갈리지 않음
+  assert.equal(behavior.state, "walk");
+  const x = behavior.feet.x;
+  run(behavior, 0.1);
+  assert.ok(behavior.feet.x > x, "기다리는 동안에도 걷는다");
+  passing = true;
+  behavior.update(1 / 60, arena);
+  assert.equal(behavior.state, "idle");
+  assert.equal(played.at(-1), "idle");
+
+  // 엇갈리는 순간이 안 오면 0.6초 뒤에 그냥 멈춘다
+  passing = false;
+  const again = new Behavior(actor, sequence(0, 0.1, 0, 0.9));
+  again.place(500, arena);
+  run(again, 3.1 + 2.1);
+  assert.equal(again.state, "walk");
+  run(again, 0.65);
+  assert.equal(again.state, "idle");
+});

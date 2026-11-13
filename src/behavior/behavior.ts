@@ -34,6 +34,8 @@ export interface Actor {
   /** 걷기 모션과 발이 미끄러지지 않는 몸 이동 속도 (정면 기준) px/s */
   readonly walkSpeedPx: number;
   play(motion: string, onFinished?: () => void): void;
+  /** 걷다가 지금 멈춰도 되는지 (두 발이 몸 아래에서 엇갈리는 순간). 없으면 언제든 멈춘다. */
+  canStopWalking?(): boolean;
 }
 
 export interface Point {
@@ -72,6 +74,8 @@ const SHAKE_HOP = 420;
 const STEP_OFF_CHANCE = 0.2;
 /** 놓은 발이 테두리에서 이 범위(위 / 아래 px) 안이면 그 창 위에 바로 선다 */
 const LEDGE_SNAP = { above: 12, below: 6 };
+/** 걷다 멈출 때 발이 엇갈리는 순간을 이만큼(초)까지 기다린다 (반 걸음 = 0.5초) */
+const STOP_WAIT_MAX = 0.6;
 
 export class Behavior {
   state: BehaviorState = "idle";
@@ -104,6 +108,8 @@ export class Behavior {
   private ledgeVelocity: Point = { x: 0, y: 0 };
   /** 떨어져 나온 창: 바닥이나 다른 창에 닿을 때까지 그 창에는 착지하지 않는다 */
   private ignoredLedge: number | null = null;
+  /** 걷기를 멈추려고 발이 엇갈리는 순간을 기다리는 중 (blocked면 제자리에서) */
+  private stopping: { time: number; blocked: boolean } | null = null;
   /** 창 끝에서 발을 헛디뎌 걸어 나가는 중 */
   private steppingOff = false;
 
@@ -294,9 +300,18 @@ export class Behavior {
 
   private updateWalk(dt: number, arena: Arena): void {
     this.targetFacing = -this.walkDirection * WALK_FACING;
+    // 멈추기: 걸음 중간에 바로 서면 앞뒤로 벌린 발이 서 있기 자세로 미끄러진다.
+    // 두 발이 몸 아래에서 엇갈리는 순간까지 마저 걷고 멈춘다 (들린 발은 그대로 내려놓는다).
+    if (this.stopping) {
+      this.stopping.time += dt;
+      if ((this.actor.canStopWalking?.() ?? true) || this.stopping.time >= STOP_WAIT_MAX) {
+        this.toIdle();
+        return;
+      }
+    }
     // 몸이 거의 돌아선 뒤에 출발 (돌면서 미끄러지지 않게)
     const turned = Math.abs(this.facing - this.targetFacing) < 0.25;
-    if (turned) {
+    if (turned && !this.stopping?.blocked) {
       // 몸을 돌린 만큼 다리 보폭의 화면 가로 성분이 줄어든다
       const speed = this.actor.walkSpeedPx * Math.sin(Math.abs(this.facing));
       this.feet.x += this.walkDirection * speed * dt;
@@ -319,11 +334,11 @@ export class Behavior {
       if (roll < 0.6) {
         this.walkDirection = atLeft ? 1 : -1;
       } else {
-        this.toIdle();
+        this.stopping = { time: 0, blocked: true };
         return;
       }
     }
-    if (!this.paused && this.stateTime >= this.stateLength) this.toIdle();
+    if (!this.paused && !this.stopping && this.stateTime >= this.stateLength) this.stopping = { time: 0, blocked: false };
   }
 
   private updateHeld(dt: number): void {
@@ -489,6 +504,7 @@ export class Behavior {
 
   private enter(state: BehaviorState, length = 0): void {
     this.steppingOff = false;
+    this.stopping = null;
     this.state = state;
     this.stateTime = 0;
     this.stateLength = length;
