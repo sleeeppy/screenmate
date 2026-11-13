@@ -353,36 +353,66 @@ test("variety: 창 위에서 쉬다가 걸터앉고, 앉은 채 창을 따라가
   run2(behavior, 4.1, onWindow);
   assert.equal(behavior.state, "sit");
   assert.equal(behavior.seat, "edge");
+  // 먼저 앉는 모션, 끝나면 걸터앉기 반복
+  assert.equal(made.played.at(-1), "sit_down_edge");
+  assert.equal(behavior.activity(), "interact");
+  made.finishMotion();
   assert.equal(made.played.at(-1), "sit_edge");
   assert.ok(behavior.headHeight < 260 * 0.5, "앉으면 머리가 낮다");
   const x = behavior.feet.x;
   run2(behavior, 0.4, { ...arena, ledges: [ledge(7, 600, 350, 950)] });
   assert.ok(Math.abs(behavior.feet.x - (x + 50)) < 0.5, "앉은 채 창을 따라간다");
   run2(behavior, 8.2, { ...arena, ledges: [ledge(7, 600, 350, 950)] });
+  // 시간이 지나면 일어서는 모션, 끝나면 서 있기
+  assert.equal(behavior.state, "rise");
+  assert.equal(behavior.seat, "edge");
+  assert.equal(made.played.at(-1), "stand_up_edge");
+  made.finishMotion();
   assert.equal(behavior.state, "idle");
 });
 
-test("오래 입력이 없으면 앉아서 졸고, 입력이 오면 깬다", () => {
-  const { actor, played } = makeActor();
+test("오래 입력이 없으면 앉아서 졸고, 입력이 오면 일어선다", () => {
+  const { actor, played, finishMotion } = makeActor();
   const behavior = new Behavior(actor, sequence(0.99), { sleepAfter: 5 });
   behavior.place(500, arena);
   run(behavior, 5.2);
   assert.equal(behavior.state, "sleep");
   assert.equal(behavior.seat, "floor");
+  assert.equal(played.at(-1), "sit_down_floor");
+  finishMotion();
   assert.equal(played.at(-1), "sleep_floor");
   behavior.noteActivity();
+  assert.equal(behavior.state, "rise");
+  assert.equal(played.at(-1), "stand_up_floor");
+  finishMotion();
   assert.equal(behavior.state, "idle");
   assert.equal(played.at(-1), "idle");
 });
 
+test("앉는 도중에 잡으면 매달리고, 놓아도 앉기 반복으로 넘어가지 않는다", () => {
+  const { actor, played, finishMotion } = makeActor();
+  const behavior = new Behavior(actor, sequence(0.99), { sleepAfter: 1 });
+  behavior.place(500, arena);
+  run(behavior, 1.2);
+  assert.equal(played.at(-1), "sit_down_floor");
+  behavior.grab({ x: 500, y: 900 }, 0);
+  finishMotion(); // (드라이버는 새 모션을 재생하면 이전 콜백을 버리지만, 와도 무시해야 한다)
+  assert.equal(behavior.state, "held");
+  assert.equal(played.at(-1), "hang");
+  assert.equal(behavior.activity(), "interact");
+});
+
 test("앉아 있을 때는 낮아진 머리를 쓰다듬는다", () => {
-  const { actor, played } = makeActor();
+  const { actor, played, finishMotion } = makeActor();
   const behavior = new Behavior(actor, sequence(0.99), { sleepAfter: 1 });
   behavior.place(500, arena);
   run(behavior, 1.2);
   assert.equal(behavior.state, "sleep");
-  // 앉은 머리 높이(키 0.42배) 근처 → 쓰다듬기, 서 있을 때 기준(0.9배)이면 머리 위 허공이다
+  // 앉은 머리 높이(키 0.42배) 근처 → 쓰다듬기, 서 있을 때 기준(0.9배)이면 머리 위 허공이다.
+  // 앉아 있으면 먼저 일어서고, 다 일어서면 쓰다듬기 반응
   behavior.click({ x: 500, y: 1000 - 260 * 0.4 });
+  assert.equal(played.at(-1), "stand_up_floor");
+  finishMotion();
   assert.equal(played.at(-1), "pat");
 });
 

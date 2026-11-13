@@ -171,9 +171,14 @@ export class MotionDriver {
   }
 
   /** 모션 재생. 같은 모션이 이미 재생 중이면 무시한다 (restart로 강제). */
-  play(motion: Motion, options: { restart?: boolean; onFinished?: (motion: Motion) => void } = {}): void {
+  play(
+    motion: Motion,
+    options: { restart?: boolean; immediate?: boolean; onFinished?: (motion: Motion) => void } = {},
+  ): void {
     const now = performance.now() / 1000;
     if (!options.restart && this.current?.name === motion.name) return;
+    // immediate: 섞지 않고 바로 이 모션의 첫 프레임부터 (미리보기를 처음부터 다시 볼 때)
+    if (options.immediate) this.playing = [];
     this.playing.push({ motion, startedAt: now, fade: this.playing.length === 0 ? 1 : 0 });
     // 완전히 덮인 오래된 클립은 버린다.
     if (this.playing.length > 3) this.playing.splice(0, this.playing.length - 3);

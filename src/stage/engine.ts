@@ -40,7 +40,8 @@ const PHYSICS_TRAVEL = 0.15;
 /** 기준점이 가슴 ↔ 잡은 점으로 바뀔 때 물리 위치가 튀지 않게 발 기준 오프셋을 이 반감기(초)로 옮긴다 */
 const PIVOT_BLEND = 0.12;
 /** 걸터앉았을 때 캔버스 상자 (키 배수): 발 기준점 아래로 다리가 0.4배쯤 내려간다 */
-const SEAT_EDGE_BOX = { widthRatio: 1.35, heightRatio: 1.6, footPadRatio: 0.5 };
+// 일어서는 모션 끝에서 선 머리까지 들어가도록 위로도 넉넉하게 (발 위 키 1.25배)
+const SEAT_EDGE_BOX = { widthRatio: 1.35, heightRatio: 1.75, footPadRatio: 0.5 };
 /** 새 모델을 보여 주기 전에 물리가 자리 잡도록 숨겨 두는 시간 */
 const REVEAL_DELAY_MS = 350;
 /** 업로드할 텍스처의 최대 한 변 길이 */
@@ -71,6 +72,9 @@ export class Stage {
   /** 행동: 발 위치·몸 방향·기울기를 정한다 */
   readonly behavior: Behavior;
   private motionName = "idle";
+  /** 미리보기 중인 모션 (자율 행동이면 null) / 다음 재생을 섞지 않고 바로 시작할지 */
+  private previewName: string | null = null;
+  private snapNextClip = false;
   private lastFrame = 0;
   /** 성능 측정용: 커서를 무시하고 대기 fps로 고정 (`--bench-idle`) */
   benchIdle = false;
@@ -229,6 +233,12 @@ export class Stage {
     void Promise.all([loaded.ready, new Promise((resolve) => window.setTimeout(resolve, REVEAL_DELAY_MS))]).then(() => {
       if (this.character === loaded) {
         loaded.setVisible(true);
+        // 미리보기 중이면 보이는 순간부터 다시 재생한다 (숨겨 둔 동안 앞부분이 지나가지 않게)
+        if (this.behavior.paused && this.previewName) {
+          // 미리보기 로직(앉기 → 반복 등)을 그대로 다시 타고, 섞지 않고 첫 프레임부터
+          this.snapNextClip = true;
+          this.behavior.preview(this.previewName);
+        }
         this.wake();
       }
     });
@@ -245,9 +255,11 @@ export class Stage {
   /** 미리보기(트레이·--motion): 자율 행동을 멈추고 그 모션만. "auto"면 자율 행동으로 돌아간다. */
   playMotion(name: string): void {
     if (name === "auto") {
+      this.previewName = null;
       this.behavior.resume();
     } else {
-      this.behavior.preview((motionByName(name) ?? idle).name);
+      this.previewName = (motionByName(name) ?? idle).name;
+      this.behavior.preview(this.previewName);
     }
     this.onMotionChanged?.();
   }
@@ -256,8 +268,11 @@ export class Stage {
   private playClip(name: string, onFinished?: () => void): void {
     const motion = motionByName(name) ?? idle;
     this.motionName = motion.name;
+    const immediate = this.snapNextClip;
+    this.snapNextClip = false;
     this.character?.motion.play(motion, {
       restart: true,
+      immediate,
       onFinished: motion.loop ? undefined : () => (onFinished ? onFinished() : this.playClip("idle")),
     });
     this.wake();
