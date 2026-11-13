@@ -1,4 +1,4 @@
-//! 트레이 메뉴: 모델 전환, 가져오기, 크기, 종료.
+//! 트레이 메뉴: 설정 창 열기, 모델 전환, 가져오기, 크기, 종료.
 
 use std::collections::BTreeMap;
 
@@ -64,7 +64,9 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     let settings = app.state::<SettingsState>().0.lock().unwrap().clone();
     let models = models::load_registry(app);
 
-    let mut menu = MenuBuilder::new(app);
+    let mut menu = MenuBuilder::new(app)
+        .item(&MenuItemBuilder::with_id("settings", "설정…").accelerator("CmdOrCtrl+,").build(app)?)
+        .item(&PredefinedMenuItem::separator(app)?);
     if models.is_empty() {
         menu = menu.item(&MenuItemBuilder::with_id("none", "가져온 모델 없음").enabled(false).build(app)?);
     }
@@ -132,15 +134,9 @@ fn on_menu_event(app: &AppHandle, event: MenuEvent) {
         refresh(app);
     } else {
         match id {
+            "settings" => crate::window::open_settings(app),
             "import" => pick_and_import(app),
-            "open-folder" => {
-                if let Ok(root) = models::data_root(app) {
-                    let folder = root.join("models");
-                    let _ = std::fs::create_dir_all(&folder);
-                    let opener = if cfg!(windows) { "explorer" } else if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
-                    let _ = std::process::Command::new(opener).arg(folder).spawn();
-                }
-            }
+            "open-folder" => open_folder(app, "models"),
             "reload" => {
                 let _ = app.emit("reload", ());
             }
@@ -150,7 +146,17 @@ fn on_menu_event(app: &AppHandle, event: MenuEvent) {
     }
 }
 
-fn pick_and_import(app: &AppHandle) {
+/// 앱 데이터 폴더(또는 그 안의 하위 폴더)를 파일 관리자로 연다.
+pub fn open_folder(app: &AppHandle, sub: &str) {
+    if let Ok(root) = models::data_root(app) {
+        let folder = if sub.is_empty() { root } else { root.join(sub) };
+        let _ = std::fs::create_dir_all(&folder);
+        let opener = if cfg!(windows) { "explorer" } else if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
+        let _ = std::process::Command::new(opener).arg(folder).spawn();
+    }
+}
+
+pub fn pick_and_import(app: &AppHandle) {
     let handle = app.clone();
     app.dialog()
         .file()

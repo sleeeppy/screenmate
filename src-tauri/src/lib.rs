@@ -3,6 +3,7 @@ mod overlay;
 mod platforms;
 mod settings;
 mod tray;
+mod window;
 
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -22,6 +23,14 @@ pub fn run() {
             models::list_models,
             models::save_model_cache,
             models::save_profile,
+            models::save_thumbnail,
+            settings::update_settings,
+            window::open_settings_window,
+            window::import_models,
+            window::open_models_folder,
+            window::open_data_folder,
+            window::reload_character,
+            window::quit_app,
             models::clear_model_cache,
             settings::get_settings,
             settings::select_model,
@@ -48,6 +57,10 @@ pub fn run() {
             platforms::install(&handle);
             tray::install(&handle)?;
             window.show()?;
+            // `--settings`: 시작하면서 설정 창을 연다 (개발·확인용)
+            if std::env::args().any(|argument| argument == "--settings") {
+                window::open_settings(&handle);
+            }
             Ok(())
         })
         .run(tauri::generate_context!())

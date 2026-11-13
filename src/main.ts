@@ -1,5 +1,7 @@
 import {
+  broadcastStatus,
   diag,
+  onStatusRequest,
   getSettings,
   launchOptions,
   listModels,
@@ -37,7 +39,10 @@ async function boot(target: HTMLCanvasElement): Promise<void> {
   let models = await listModels();
   let loadedId: string | null = null;
 
-  stage.setHeight(settings.heightPx);
+  stage.applySettings(settings);
+  // 설정 창: 지금 상태를 알리고, 물으면 다시 알린다
+  stage.onStatus = (status) => void broadcastStatus(status).catch(() => {});
+  void onStatusRequest(() => void broadcastStatus(stage.status()).catch(() => {}));
 
   // 기본은 자율 행동. 실행 옵션(--motion)이 있거나 트레이에서 고르면 그 모션만 미리보기한다.
   const options = await launchOptions();
@@ -94,7 +99,7 @@ async function boot(target: HTMLCanvasElement): Promise<void> {
 
   void onSettingsChanged((next: Settings) => {
     settings = next;
-    stage.setHeight(next.heightPx);
+    stage.applySettings(next);
     void loadSelected();
   });
   void onModelsChanged(async () => {
