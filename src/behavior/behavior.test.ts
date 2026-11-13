@@ -193,11 +193,10 @@ test("창이 움직이면 같이 움직인다", () => {
   const { behavior } = standOnWindow();
   const x = behavior.feet.x;
   const moved: Arena = { ...arena, ledges: [ledge(7, 550, 340, 940)] };
-  behavior.update(1 / 60, moved);
-  behavior.update(1 / 60, moved);
+  run2(behavior, 0.4, moved); // 매끄럽게 따라가므로 잠깐 뒤에 맞춘다
   assert.ok(behavior.onLedge);
-  assert.ok(Math.abs(behavior.feet.x - (x + 40)) < 1e-9, `x=${behavior.feet.x}`);
-  assert.equal(behavior.feet.y, 550);
+  assert.ok(Math.abs(behavior.feet.x - (x + 40)) < 0.5, `x=${behavior.feet.x}`);
+  assert.ok(Math.abs(behavior.feet.y - 550) < 0.5, `y=${behavior.feet.y}`);
 });
 
 test("창이 사라지면 떨어져서 바닥에 선다", () => {
@@ -285,3 +284,128 @@ test("걷다 멈출 때는 두 발이 엇갈리는 순간까지 마저 걷는다
   run(again, 0.65);
   assert.equal(again.state, "idle");
 });
+
+// ---------------------------------------------------------------- M6: 버둥거리기·두리번·앉기·졸기
+
+test("오래 들고 있으면 버둥거리고, 놓으면 떨어진다", () => {
+  const { actor, played } = makeActor();
+  const behavior = new Behavior(actor, sequence(0.9));
+  behavior.place(500, arena);
+  behavior.grab({ x: 500, y: 700 }, 0);
+  behavior.drag({ x: 500, y: 500 }, 16);
+  run(behavior, 2.5);
+  assert.equal(played.at(-1), "hang");
+  run(behavior, 1);
+  assert.equal(played.at(-1), "hang_struggle");
+  behavior.release(10_000, arena);
+  assert.equal(played.at(-1), "fall");
+});
+
+test("세게 흔들면 바로 버둥거린다", () => {
+  const { actor, played } = makeActor();
+  const behavior = new Behavior(actor, sequence(0.9));
+  behavior.place(500, arena);
+  behavior.grab({ x: 500, y: 700 }, 0);
+  // 3Hz로 ±300px 흔들기 (손 속력 평균 약 3600px/s), 1초
+  for (let i = 1; i <= 60; i++) {
+    const t = i / 60;
+    behavior.drag({ x: 500 + 300 * Math.sin(2 * Math.PI * 3 * t), y: 600 }, t * 1000);
+    behavior.update(1 / 60, arena);
+  }
+  assert.ok(played.includes("hang_struggle"));
+  // 천천히 끄는 건 버둥거리지 않는다 (0.5Hz ±150px, 2초)
+  const slow = makeActor();
+  const calm = new Behavior(slow.actor, sequence(0.9));
+  calm.place(500, arena);
+  calm.grab({ x: 500, y: 700 }, 0);
+  for (let i = 1; i <= 120; i++) {
+    const t = i / 60;
+    calm.drag({ x: 500 + 150 * Math.sin(2 * Math.PI * 0.5 * t), y: 600 }, t * 1000);
+    calm.update(1 / 60, arena);
+  }
+  assert.ok(!slow.played.includes("hang_struggle"));
+});
+
+test("variety: 서 있기가 끝나면 가끔 두리번거리거나 기지개를 켜고 다시 선다", () => {
+  const { actor, played, finishMotion } = makeActor();
+  // 첫 대기(0 → 3초), 고르기 0.95(기지개), 다음 대기 0, 고르기 0.82(두리번)
+  const behavior = new Behavior(actor, sequence(0, 0.95, 0, 0.82), { variety: true });
+  behavior.place(500, arena);
+  run(behavior, 3.1);
+  assert.equal(behavior.state, "act");
+  assert.equal(played.at(-1), "idle_stretch");
+  finishMotion();
+  assert.equal(behavior.state, "idle");
+  run(behavior, 4.1);
+  assert.equal(played.at(-1), "idle_look");
+});
+
+test("variety: 창 위에서 쉬다가 걸터앉고, 앉은 채 창을 따라가다 시간이 지나면 선다", () => {
+  const made = makeActor();
+  // 놓을 때 대기(0 → 4초), 고르기 0.1(걸터앉기), 앉는 시간 0(8초)
+  const behavior = new Behavior(made.actor, sequence(0.9, 0, 0.1, 0), { variety: true });
+  const onWindow: Arena = { ...arena, ledges: [ledge(7, 600, 300, 900)] };
+  behavior.place(500, onWindow);
+  behavior.grab({ x: 500, y: 900 }, 0);
+  behavior.drag({ x: 500, y: 500 }, 16);
+  run2(behavior, 1, onWindow);
+  behavior.release(2000, onWindow);
+  run2(behavior, 4.1, onWindow);
+  assert.equal(behavior.state, "sit");
+  assert.equal(behavior.seat, "edge");
+  assert.equal(made.played.at(-1), "sit_edge");
+  assert.ok(behavior.headHeight < 260 * 0.5, "앉으면 머리가 낮다");
+  const x = behavior.feet.x;
+  run2(behavior, 0.4, { ...arena, ledges: [ledge(7, 600, 350, 950)] });
+  assert.ok(Math.abs(behavior.feet.x - (x + 50)) < 0.5, "앉은 채 창을 따라간다");
+  run2(behavior, 8.2, { ...arena, ledges: [ledge(7, 600, 350, 950)] });
+  assert.equal(behavior.state, "idle");
+});
+
+test("오래 입력이 없으면 앉아서 졸고, 입력이 오면 깬다", () => {
+  const { actor, played } = makeActor();
+  const behavior = new Behavior(actor, sequence(0.99), { sleepAfter: 5 });
+  behavior.place(500, arena);
+  run(behavior, 5.2);
+  assert.equal(behavior.state, "sleep");
+  assert.equal(behavior.seat, "floor");
+  assert.equal(played.at(-1), "sleep_floor");
+  behavior.noteActivity();
+  assert.equal(behavior.state, "idle");
+  assert.equal(played.at(-1), "idle");
+});
+
+test("앉아 있을 때는 낮아진 머리를 쓰다듬는다", () => {
+  const { actor, played } = makeActor();
+  const behavior = new Behavior(actor, sequence(0.99), { sleepAfter: 1 });
+  behavior.place(500, arena);
+  run(behavior, 1.2);
+  assert.equal(behavior.state, "sleep");
+  // 앉은 머리 높이(키 0.42배) 근처 → 쓰다듬기, 서 있을 때 기준(0.9배)이면 머리 위 허공이다
+  behavior.click({ x: 500, y: 1000 - 260 * 0.4 });
+  assert.equal(played.at(-1), "pat");
+});
+
+test("창이 일정하게 움직이면 매 프레임 고르게 따라간다 (창 위치가 두 프레임에 한 번 바뀌어도)", () => {
+  const { behavior } = standOnWindow();
+  const start = behavior.feet.x;
+  let windowX = 300;
+  const steps: number[] = [];
+  let last = behavior.feet.x;
+  for (let frame = 0; frame < 120; frame++) {
+    if (frame % 2 === 0) windowX += 250 / 30; // 250px/s, 30Hz로만 바뀜
+    behavior.update(1 / 60, { ...arena, ledges: [ledge(7, 600, windowX, windowX + 600)] });
+    if (frame >= 30) steps.push(behavior.feet.x - last);
+    last = behavior.feet.x;
+  }
+  const mean = steps.reduce((sum, step) => sum + step, 0) / steps.length;
+  const spread = Math.sqrt(steps.reduce((sum, step) => sum + (step - mean) ** 2, 0) / steps.length);
+  close2(mean, 250 / 60, 0.3);
+  assert.ok(spread < mean * 0.15, `프레임마다 이동량 ${mean.toFixed(2)} ± ${spread.toFixed(2)}`);
+  // 창보다 크게 뒤처지지 않는다
+  assert.ok(Math.abs(behavior.feet.x - start - (windowX - 300)) < 10, "뒤처짐 10px 이내");
+});
+
+function close2(actual: number, expected: number, epsilon: number): void {
+  assert.ok(Math.abs(actual - expected) < epsilon, `${actual} ≈ ${expected}`);
+}
