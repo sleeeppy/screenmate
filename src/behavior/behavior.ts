@@ -15,7 +15,7 @@
 import { clamp, damp } from "../motion/math.ts";
 import type { Ledge } from "./platforms.ts";
 
-export type BehaviorState = "idle" | "walk" | "held" | "fall" | "land" | "react" | "act" | "sit" | "sleep";
+export type BehaviorState = "idle" | "walk" | "held" | "fall" | "land" | "react" | "act" | "sit" | "sleep" | "rise";
 
 export interface BehaviorOptions {
   /**
@@ -103,6 +103,8 @@ const STRUGGLE_MIN = 1.2;
 const IDLE_CHOICES = { sitEdge: 0.3, sitFloor: 0.06, look: 0.14, stretch: 0.08 };
 /** 걸터앉거나 바닥에 앉아 있는 시간 (초) */
 const SIT_SECONDS = { min: 8, max: 18 };
+/** 앉을 때 몸을 돌리는 각도 (라디안, 약 18°) */
+const SIT_FACING = (18 * Math.PI) / 180;
 /** 앉았을 때 머리 꼭대기 높이 / 선 키 (clips/sit.ts SIT_HEAD_RATIO와 같게) */
 const SIT_HEAD_RATIO = 0.42;
 
@@ -150,6 +152,9 @@ export class Behavior {
   private readonly actor: Actor;
   private readonly random: () => number;
   private readonly options: BehaviorOptions;
+  /** 앉는 모션을 하는 중 (반복 모션으로 넘어가기 전) / 일어서는 중의 앉은 자세 */
+  private seatMoving = false;
+  private riseSeat: "edge" | "floor" = "floor";
   /** 미리보기에서 보여 줄 앉은 자세 */
   private previewSeat: "edge" | "floor" | null = null;
   /** 마지막 사용자 입력 이후 시간 (초) */
@@ -189,6 +194,7 @@ export class Behavior {
 
   /** 앉은 자세: 창 테두리에 걸터앉았는지, 바닥에 앉았는지 (상자 모양·클릭 판정용) */
   get seat(): "edge" | "floor" | null {
+    if (this.state === "rise") return this.riseSeat;
     if (this.state !== "sit" && this.state !== "sleep") return null;
     if (this.paused && this.previewSeat) return this.previewSeat;
     return this.ledgeId !== null ? "edge" : "floor";
@@ -202,12 +208,14 @@ export class Behavior {
   /** 사용자 입력(커서 근처·클릭·끌기)이 있었다. 졸고 있었으면 깬다. */
   noteActivity(): void {
     this.quietTime = 0;
-    if (this.state === "sleep" && !this.paused) this.toIdle();
+    if (this.state === "sleep" && !this.paused) this.rise();
   }
 
   activity(): BehaviorActivity {
     if (this.state === "held" || this.state === "fall" || this.state === "land" || this.state === "react") return "interact";
     if (this.state === "act") return "near";
+    // 앉는 중·일어서는 중은 매 프레임 그린다
+    if (this.state === "rise" || this.seatMoving) return "interact";
     // 서 있는 창이 움직이는 동안은 매 프레임 그려야 매끄럽게 따라간다
     if (this.ledgeId !== null && this.ledgeSpeed > 20) return "interact";
     if (this.state === "walk" || Math.abs(this.facing - this.targetFacing) > 0.02) return "near";
@@ -247,7 +255,16 @@ export class Behavior {
     const seated = motion.startsWith("sit_") || motion.startsWith("sleep_");
     this.previewSeat = seated ? (motion.endsWith("_edge") ? "edge" : "floor") : null;
     this.enter(seated ? (motion.startsWith("sleep_") ? "sleep" : "sit") : "idle");
-    this.targetFacing = motion === "walk" ? -WALK_FACING : 0;
+    const turning = seated || motion.startsWith("sit_down_") || motion.startsWith("stand_up_");
+    this.targetFacing = motion === "walk" ? -WALK_FACING : turning ? -SIT_FACING : 0;
+    // 앉는 모션은 실제 행동처럼 끝나면 앉기 반복으로 이어서 보여 준다
+    if (motion.startsWith("sit_down_")) {
+      const seat = motion.endsWith("_edge") ? "edge" : "floor";
+      this.previewSeat = seat;
+      this.enter("sit");
+      this.actor.play(motion, () => this.actor.play(`sit_${seat}`));
+      return;
+    }
     this.actor.play(motion);
   }
 
@@ -274,7 +291,9 @@ export class Behavior {
         this.updateFall(dt, arena);
         break;
       case "sit":
-        if (!this.paused && this.stateTime >= this.stateLength) this.toIdle();
+        if (!this.paused && !this.seatMoving && this.stateTime >= this.stateLength) this.rise();
+        break;
+      case "rise":
         break;
       case "land":
       case "react":
@@ -364,10 +383,15 @@ export class Behavior {
 
   /** 끌지 않고 짧게 클릭 */
   click(pointer: Point): void {
-    if (this.airborne || this.state === "land") return;
+    if (this.airborne || this.state === "land" || this.state === "rise") return;
     this.quietTime = 0;
     // 머리 꼭대기(서 있으면 頭 높이 = heightPx, 앉으면 더 낮다)보다 살짝 아래부터 머리로 본다.
     const head = pointer.y < this.feet.y - this.headHeight * 0.9;
+    // 앉아 있으면 먼저 일어선 다음 반응한다 (앉은 채로 선 자세 반응을 하면 튄다)
+    if (this.seat && !this.paused) {
+      this.rise(head ? "pat" : "poke");
+      return;
+    }
     this.targetFacing = 0;
     this.enter("react");
     this.actor.play(head ? "pat" : "poke", () => this.toIdle());
@@ -541,16 +565,43 @@ export class Behavior {
   }
 
   /** 그 자리에 앉는다 (창 위면 걸터앉기, 바닥이면 다리 뻗고). sleepy면 존다. */
+  /**
+   * 그 자리에 앉는다 (창 위면 걸터앉기, 바닥이면 다리 뻗고). sleepy면 존다.
+   * 서 있었으면 앉는 모션(sit_down_*)을 먼저 하고, 이미 앉아 있으면 바로 반복 모션으로 바꾼다.
+   */
   private sit(sleepy: boolean): void {
-    this.targetFacing = 0;
-    const edge = this.ledgeId !== null;
-    if (sleepy) {
-      this.enter("sleep");
-      this.actor.play(edge ? "sleep_edge" : "sleep_floor");
-    } else {
-      this.enter("sit", SIT_SECONDS.min + this.random() * (SIT_SECONDS.max - SIT_SECONDS.min));
-      this.actor.play(edge ? "sit_edge" : "sit_floor");
+    // 정면 카메라라 정면으로 앉으면 무릎이 화면 쪽을 향해 다리가 짧아 보인다. 걷던 쪽으로 살짝 돌아앉는다.
+    this.targetFacing = -this.walkDirection * SIT_FACING;
+    const seat = this.ledgeId !== null ? "edge" : "floor";
+    const loop = `${sleepy ? "sleep" : "sit"}_${seat}`;
+    const alreadySeated = this.state === "sit" || this.state === "sleep";
+    if (sleepy) this.enter("sleep");
+    else this.enter("sit", SIT_SECONDS.min + this.random() * (SIT_SECONDS.max - SIT_SECONDS.min));
+    if (alreadySeated) {
+      this.actor.play(loop);
+      return;
     }
+    this.seatMoving = true;
+    this.actor.play(`sit_down_${seat}`, () => {
+      this.seatMoving = false;
+      if (this.state === "sit" || this.state === "sleep") this.actor.play(loop);
+    });
+  }
+
+  /** 앉은 자리에서 일어선다 (stand_up_*). 끝나면 서 있기, 클릭으로 일어났으면 그 반응을 이어서 한다. */
+  private rise(reaction?: "pat" | "poke"): void {
+    const seat = this.seat ?? "floor";
+    this.enter("rise");
+    this.riseSeat = seat;
+    this.actor.play(`stand_up_${seat}`, () => {
+      if (this.state !== "rise") return;
+      if (reaction) {
+        this.enter("react");
+        this.actor.play(reaction, () => this.toIdle());
+      } else {
+        this.toIdle();
+      }
+    });
   }
 
   // ---------------------------------------------------------------- 창 발판
@@ -680,6 +731,8 @@ export class Behavior {
   private enter(state: BehaviorState, length = 0): void {
     this.steppingOff = false;
     this.stopping = null;
+    // 앉는 도중 잡히거나 떨어지면 콜백이 안 오므로 상태가 바뀔 때마다 푼다 (sit()은 enter 뒤에 다시 켠다)
+    this.seatMoving = false;
     this.state = state;
     this.stateTime = 0;
     this.stateLength = length;

@@ -222,3 +222,57 @@ test("걷기: 발을 뗄 때·디딜 때 발 속도가 끊기지 않는다 (걸�
     assert.ok(Math.abs(up - down) < 0.35, `${contact}프레임 위아래 속도 ${down.toFixed(3)} → ${up.toFixed(3)}`);
   }
 });
+
+test("앉기 전환: 앉는 모션 끝 = 앉기 반복 첫 프레임 = 일어서는 모션 시작 (이음매 없음)", () => {
+  const byName = (name: string) => MOTIONS.find((motion) => motion.name === name)!;
+  for (const seat of ["edge", "floor"]) {
+    const down = byName(`sit_down_${seat}`);
+    const loop = byName(`sit_${seat}`);
+    const up = byName(`stand_up_${seat}`);
+    for (const track of loop.bones) {
+      const downTrack = down.bones.find((candidate) => candidate.name === track.name);
+      const upTrack = up.bones.find((candidate) => candidate.name === track.name);
+      assert.ok(downTrack && upTrack, `${seat}/${track.name}: 전환에도 있어야 한다`);
+      const at = (motion: typeof loop, target: typeof track, frame: number) => sampleRotation(target, frame, motion, [0, 0, 0, 1]);
+      closeQuat(at(down, downTrack, down.length), at(loop, track, 0));
+      closeQuat(at(up, upTrack, 0), at(loop, track, 0));
+      if (track.hasPosition) {
+        close(samplePosition(downTrack, down.length, down, [0, 0, 0])[1], samplePosition(track, 0, loop, [0, 0, 0])[1]);
+      }
+    }
+    // 일어서기 끝과 앉기 시작은 선 자세(센터 0)
+    const center = (motion: typeof loop, frame: number) =>
+      samplePosition(motion.bones.find((track) => track.name === "センター")!, frame, motion, [0, 0, 0])[1];
+    close(center(up, up.length), 0);
+    close(center(down, 0), 0);
+    assert.ok(!down.loop && !up.loop && !down.legIk && !up.legIk);
+  }
+});
+
+test("자세 곡선: 키를 지나고, 중간 키에서 멈추지 않으며, 넘치지 않고, 시간 차가 있어도 끝 자세가 맞는다", async () => {
+  const { splinePose } = await import("./spline.ts");
+  const steps = [
+    { frame: 0, pose: { センター: { py: 0 }, 首: { rx: 0 } } },
+    { frame: 10, pose: { センター: { py: -3 }, 首: { rx: 10 } } },
+    { frame: 20, pose: { センター: { py: -8 }, 首: { rx: 4 } } },
+    { frame: 30, pose: { センター: { py: -9 }, 首: { rx: 4 } } },
+  ];
+  const tracks = splinePose(steps, 30, { 首: 3 });
+  const center = tracks["センター"].map((key) => key.py ?? 0);
+  // 키를 정확히 지난다
+  close(center[0], 0);
+  close(center[10], -3);
+  close(center[20], -8);
+  close(center[30], -9);
+  // 중간 키(10프레임)에서 속도가 이어진다: 앞뒤 한 프레임 이동량이 비슷하고 0이 아니다
+  const before = center[10] - center[9];
+  const after = center[11] - center[10];
+  assert.ok(before < -0.1 && after < -0.1 && Math.abs(after - before) < 0.25, `${before} → ${after}`);
+  // 단조: 내려가기만 한다 (넘치지 않음)
+  for (let i = 1; i < center.length; i++) assert.ok(center[i] <= center[i - 1] + 1e-9);
+  // 시간 차가 있어도 처음·끝은 키 그대로, 가운데서는 늦게 따라온다
+  const neck = tracks["首"].map((key) => key.rx ?? 0);
+  close(neck[0], 0);
+  close(neck[30], 4);
+  assert.ok(neck[10] < 10 - 1, `늦게 따라온다 (${neck[10]})`);
+});

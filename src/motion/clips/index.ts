@@ -7,7 +7,7 @@ import { idleLook, idleStretch } from "./idleVariants.ts";
 import land from "./land.ts";
 import pat from "./pat.ts";
 import poke from "./poke.ts";
-import { sitEdge, sitFloor, sleepEdge, sleepFloor } from "./sit.ts";
+import { sitDownEdge, sitDownFloor, sitEdge, sitFloor, sleepEdge, sleepFloor, standUpEdge, standUpFloor } from "./sit.ts";
 import walk from "./walk.ts";
 
 export const MOTIONS: readonly Motion[] = [
@@ -25,10 +25,33 @@ export const MOTIONS: readonly Motion[] = [
   sitFloor,
   sleepEdge,
   sleepFloor,
+  sitDownEdge,
+  sitDownFloor,
+  standUpEdge,
+  standUpFloor,
 ];
 
 export function motionByName(name: string): Motion | undefined {
   return MOTIONS.find((motion) => motion.name === name);
 }
 
-export { fall, hang, hangStruggle, idle, idleLook, idleStretch, land, pat, poke, sitEdge, sitFloor, sleepEdge, sleepFloor, walk };
+export {
+  fall,
+  hang,
+  hangStruggle,
+  idle,
+  idleLook,
+  idleStretch,
+  land,
+  pat,
+  poke,
+  sitDownEdge,
+  sitDownFloor,
+  sitEdge,
+  sitFloor,
+  sleepEdge,
+  sleepFloor,
+  standUpEdge,
+  standUpFloor,
+  walk,
+};
