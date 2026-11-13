@@ -39,6 +39,8 @@ const LEDGE = { headroom: 1.1, minWidth: 0.45 };
 const PHYSICS_TRAVEL = 0.15;
 /** 기준점이 가슴 ↔ 잡은 점으로 바뀔 때 물리 위치가 튀지 않게 발 기준 오프셋을 이 반감기(초)로 옮긴다 */
 const PIVOT_BLEND = 0.12;
+/** 걸터앉았을 때 캔버스 상자 (키 배수): 발 기준점 아래로 다리가 0.4배쯤 내려간다 */
+const SEAT_EDGE_BOX = { widthRatio: 1.35, heightRatio: 1.6, footPadRatio: 0.5 };
 /** 새 모델을 보여 주기 전에 물리가 자리 잡도록 숨겨 두는 시간 */
 const REVEAL_DELAY_MS = 350;
 /** 업로드할 텍스처의 최대 한 변 길이 */
@@ -132,7 +134,7 @@ export class Stage {
         const frame = motion?.currentFrame ?? null;
         return motion?.current?.name !== "walk" || frame === null || isPassingFrame(frame);
       },
-    });
+    }, Math.random, { variety: true });
     this.behavior.place(info.workArea.x + info.workArea.width / 2, this.arena());
     attachPointer({
       grab: (point, now) => {
@@ -151,6 +153,8 @@ export class Stage {
     });
     void onCursor((event) => {
       this.cursor = event.near && !this.benchIdle ? event : null;
+      // 커서가 다가오는 것도 입력이다 (오래 입력이 없으면 졸고, 다가오면 깬다)
+      if (this.cursor) this.behavior.noteActivity();
     });
     window.addEventListener("resize", () => this.engine.resize());
     this.startLoop();
@@ -386,7 +390,8 @@ export class Stage {
     // 몸을 돌리고 있으면 화면 가로 거리가 모델 로컬 x로는 cos만큼 줄어든다.
     return {
       dx: (world.x - head.x) * Math.cos(this.behavior.facing),
-      dy: world.y - (head.y + character.calibration.headY),
+      // 앉으면 머리가 낮다 (behavior.headHeight)
+      dy: world.y - (head.y + this.behavior.headHeight / this.space.pixelsPerUnit),
     };
   }
 
@@ -419,6 +424,9 @@ export class Stage {
     if (this.behavior.airborne) {
       const center = rotateCss({ x: 0, y: -this.heightPx * FREE_BOX.center }, roll);
       rect = this.box.around(feet.x + center.x, feet.y + center.y, this.heightPx * FREE_BOX.size);
+    } else if (this.behavior.seat === "edge") {
+      // 걸터앉으면 다리가 테두리 아래로 내려간다. 앉는 동안(0.5초) 선 머리도 잘리지 않게 위아래 모두 넉넉히.
+      rect = this.box.update(feet.x, feet.y, this.heightPx, SEAT_EDGE_BOX);
     } else {
       rect = this.box.update(feet.x, feet.y, this.heightPx);
     }

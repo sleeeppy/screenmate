@@ -4,7 +4,8 @@
 //! `behavior/platforms.ts`가 한다 (Node에서 테스트할 수 있게). 여기서는 창 목록만.
 //!
 //! 이벤트 훅 대신 폴링한다. 창 목록 수집은 수십 개 창 기준 1ms 안팎이고,
-//! 바뀌었을 때만 보낸다. 캐릭터가 창 위에 있을 때만 빠르게(30Hz) 돌아서 창을 따라간다.
+//! 바뀌었을 때만 보낸다. 캐릭터가 창 위에 있을 때만 빠르게(8ms) 돌아서 창을 따라간다.
+//! (33ms면 60fps 렌더에서 창 위치가 두 프레임에 한 번만 바뀌어 캐릭터가 계단식으로 끊겨 따라갔다.)
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -16,7 +17,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use crate::overlay::OverlayState;
 
 const SLOW_INTERVAL: Duration = Duration::from_millis(150);
-const FAST_INTERVAL: Duration = Duration::from_millis(33);
+const FAST_INTERVAL: Duration = Duration::from_millis(8);
 /// 이보다 작은 창(CSS px)은 발판으로 쓰지 않는다 (툴팁, 작은 팝업)
 const MIN_SIZE: f64 = 80.0;
 

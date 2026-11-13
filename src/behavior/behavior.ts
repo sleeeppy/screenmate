@@ -15,7 +15,17 @@
 import { clamp, damp } from "../motion/math.ts";
 import type { Ledge } from "./platforms.ts";
 
-export type BehaviorState = "idle" | "walk" | "held" | "fall" | "land" | "react";
+export type BehaviorState = "idle" | "walk" | "held" | "fall" | "land" | "react" | "act" | "sit" | "sleep";
+
+export interface BehaviorOptions {
+  /**
+   * 서 있다가 가끔 두리번거리기·기지개, 창 위에서 걸터앉기, 바닥에 앉기를 한다.
+   * 난수를 더 쓰므로 기존 행동 테스트(고정 난수 순서)와 섞이지 않게 앱에서만 켠다.
+   */
+  variety?: boolean;
+  /** 이 시간(초) 동안 사용자 입력이 없으면 앉아서 존다 (기본 10분) */
+  sleepAfter?: number;
+}
 export type BehaviorActivity = "interact" | "near" | "idle";
 
 export interface Arena {
@@ -68,6 +78,11 @@ const SHAKE_WINDOW = 0.25;
 const SHAKE_SPEED = 2500;
 /** 흔들려 떨어질 때 창 속도를 이만큼 물려받는다 */
 const SHAKE_CARRY = 0.5;
+/** 창 따라가기: 이 시간(초) 넘게 창 위치가 안 바뀌면 멈춘 것으로 본다 / 남은 오차를 메우는 반감기 */
+const FOLLOW_STOP_AFTER = 0.05;
+const FOLLOW_CATCH_UP = 0.04;
+/** 창 속도 어림 상한 (px/s) */
+const FOLLOW_MAX_SPEED = 4000;
 /** 흔들려 떨어질 때 위로 튕기는 속도 (px/s) */
 const SHAKE_HOP = 420;
 /** 창 끝에 닿았을 때 발을 헛디뎌 떨어질 확률 (나머지는 돌아서기·멈추기) */
@@ -76,6 +91,20 @@ const STEP_OFF_CHANCE = 0.2;
 const LEDGE_SNAP = { above: 12, below: 6 };
 /** 걷다 멈출 때 발이 엇갈리는 순간을 이만큼(초)까지 기다린다 (반 걸음 = 0.5초) */
 const STOP_WAIT_MAX = 0.6;
+/**
+ * 들고 있은 지 이만큼(초) 지나거나, 잡은 손의 평균 속력(0.3초 지수 평균, px/s)이 이 값을 넘으면 버둥거린다.
+ * 진자(0.85Hz) 흔들림으로 재면 빠르게 흔들수록 오히려 작아져서 손 속력으로 잰다. 보통 끌기는 1000 안팎.
+ */
+const STRUGGLE_AFTER = 3;
+const STRUGGLE_SHAKE = 1800;
+/** 버둥거리기를 한 번 시작하면 최소 이만큼(초)은 계속한다 (깜빡이지 않게) */
+const STRUGGLE_MIN = 1.2;
+/** 서 있기가 끝났을 때 고르는 확률 (variety): 창 위 걸터앉기, 바닥 앉기, 두리번, 기지개. 나머지는 걷기 */
+const IDLE_CHOICES = { sitEdge: 0.3, sitFloor: 0.06, look: 0.14, stretch: 0.08 };
+/** 걸터앉거나 바닥에 앉아 있는 시간 (초) */
+const SIT_SECONDS = { min: 8, max: 18 };
+/** 앉았을 때 머리 꼭대기 높이 / 선 키 (clips/sit.ts SIT_HEAD_RATIO와 같게) */
+const SIT_HEAD_RATIO = 0.42;
 
 export class Behavior {
   state: BehaviorState = "idle";
@@ -106,6 +135,10 @@ export class Behavior {
   /** 최근 창 이동 평균 속력 / 평균 속도 (SHAKE_WINDOW 지수 평균, px/s) */
   private ledgeSpeed = 0;
   private ledgeVelocity: Point = { x: 0, y: 0 };
+  /** 화면에 보이는 발판 창 위치(부드럽게 따라감), 창 속도 어림, 마지막 위치 변화 뒤 시간 */
+  private ledgeShown: Point = { x: 0, y: 0 };
+  private ledgeEstimate: Point = { x: 0, y: 0 };
+  private ledgeSampleAge = 0;
   /** 떨어져 나온 창: 바닥이나 다른 창에 닿을 때까지 그 창에는 착지하지 않는다 */
   private ignoredLedge: number | null = null;
   /** 걷기를 멈추려고 발이 엇갈리는 순간을 기다리는 중 (blocked면 제자리에서) */
@@ -116,10 +149,21 @@ export class Behavior {
   // Node 타입 제거 모드는 생성자 매개변수 속성을 지원하지 않아 필드를 따로 둔다.
   private readonly actor: Actor;
   private readonly random: () => number;
+  private readonly options: BehaviorOptions;
+  /** 미리보기에서 보여 줄 앉은 자세 */
+  private previewSeat: "edge" | "floor" | null = null;
+  /** 마지막 사용자 입력 이후 시간 (초) */
+  private quietTime = 0;
+  /** 들고 있은 시간, 진자 흔들림 속도 평균, 버둥거리기 중인지 */
+  private heldTime = 0;
+  private shake = 0;
+  private struggling = false;
+  private struggleTime = 0;
 
-  constructor(actor: Actor, random: () => number = Math.random) {
+  constructor(actor: Actor, random: () => number = Math.random, options: BehaviorOptions = {}) {
     this.actor = actor;
     this.random = random;
+    this.options = options;
   }
 
   /** 박스를 넉넉하게(회전·매달림 포함) 잡아야 하는 상태인지 */
@@ -143,8 +187,29 @@ export class Behavior {
     return this.ledgeId !== null;
   }
 
+  /** 앉은 자세: 창 테두리에 걸터앉았는지, 바닥에 앉았는지 (상자 모양·클릭 판정용) */
+  get seat(): "edge" | "floor" | null {
+    if (this.state !== "sit" && this.state !== "sleep") return null;
+    if (this.paused && this.previewSeat) return this.previewSeat;
+    return this.ledgeId !== null ? "edge" : "floor";
+  }
+
+  /** 발 기준점에서 머리 꼭대기까지 높이 (px). 앉으면 낮아진다. */
+  get headHeight(): number {
+    return this.actor.heightPx * (this.seat ? SIT_HEAD_RATIO : 1);
+  }
+
+  /** 사용자 입력(커서 근처·클릭·끌기)이 있었다. 졸고 있었으면 깬다. */
+  noteActivity(): void {
+    this.quietTime = 0;
+    if (this.state === "sleep" && !this.paused) this.toIdle();
+  }
+
   activity(): BehaviorActivity {
     if (this.state === "held" || this.state === "fall" || this.state === "land" || this.state === "react") return "interact";
+    if (this.state === "act") return "near";
+    // 서 있는 창이 움직이는 동안은 매 프레임 그려야 매끄럽게 따라간다
+    if (this.ledgeId !== null && this.ledgeSpeed > 20) return "interact";
     if (this.state === "walk" || Math.abs(this.facing - this.targetFacing) > 0.02) return "near";
     return "idle";
   }
@@ -178,7 +243,10 @@ export class Behavior {
   /** 미리보기: 자율 행동을 멈추고 모션만 재생 (걷기는 제자리에서 옆으로 돈 채로) */
   preview(motion: string): void {
     this.paused = true;
-    this.enter("idle");
+    // 앉기 미리보기는 앉은 상태로 둔다 (캔버스 상자·클릭 판정이 앉은 자세에 맞게)
+    const seated = motion.startsWith("sit_") || motion.startsWith("sleep_");
+    this.previewSeat = seated ? (motion.endsWith("_edge") ? "edge" : "floor") : null;
+    this.enter(seated ? (motion.startsWith("sleep_") ? "sleep" : "sit") : "idle");
     this.targetFacing = motion === "walk" ? -WALK_FACING : 0;
     this.actor.play(motion);
   }
@@ -205,9 +273,20 @@ export class Behavior {
       case "fall":
         this.updateFall(dt, arena);
         break;
+      case "sit":
+        if (!this.paused && this.stateTime >= this.stateLength) this.toIdle();
+        break;
       case "land":
       case "react":
+      case "act":
+      case "sleep":
         break;
+    }
+    // 오래 아무 입력이 없으면 그 자리에 앉아 존다 (창 위면 걸터앉아서)
+    if (!this.airborne && !this.paused) {
+      this.quietTime += dt;
+      const sleepAfter = this.options.sleepAfter ?? 600;
+      if (this.quietTime >= sleepAfter && (this.state === "idle" || this.state === "sit")) this.sit(true);
     }
     if (!this.airborne) {
       this.roll = damp(this.roll, 0, 0.08, dt);
@@ -230,6 +309,10 @@ export class Behavior {
     this.targetFacing = 0;
     this.ledgeId = null;
     this.ignoredLedge = null;
+    this.heldTime = 0;
+    this.shake = 0;
+    this.struggling = false;
+    this.quietTime = 0;
     this.enter("held");
     this.actor.play("hang");
   }
@@ -282,8 +365,9 @@ export class Behavior {
   /** 끌지 않고 짧게 클릭 */
   click(pointer: Point): void {
     if (this.airborne || this.state === "land") return;
-    // 頭 높이 = heightPx. 그보다 살짝 아래부터 머리로 본다.
-    const head = pointer.y < this.feet.y - this.actor.heightPx * 0.9;
+    this.quietTime = 0;
+    // 머리 꼭대기(서 있으면 頭 높이 = heightPx, 앉으면 더 낮다)보다 살짝 아래부터 머리로 본다.
+    const head = pointer.y < this.feet.y - this.headHeight * 0.9;
     this.targetFacing = 0;
     this.enter("react");
     this.actor.play(head ? "pat" : "poke", () => this.toIdle());
@@ -293,6 +377,24 @@ export class Behavior {
 
   private updateIdle(): void {
     if (this.paused || this.stateTime < this.stateLength) return;
+    if (this.options.variety) {
+      const pick = this.random();
+      const { sitEdge, sitFloor, look, stretch } = IDLE_CHOICES;
+      if (this.ledgeId !== null && pick < sitEdge) {
+        this.sit(false);
+        return;
+      }
+      if (this.ledgeId === null && pick < sitFloor) {
+        this.sit(false);
+        return;
+      }
+      if (pick >= 1 - look - stretch) {
+        this.targetFacing = 0;
+        this.enter("act");
+        this.actor.play(pick >= 1 - stretch ? "idle_stretch" : "idle_look", () => this.toIdle());
+        return;
+      }
+    }
     this.walkDirection = this.random() < 0.5 ? 1 : -1;
     this.enter("walk", 2 + this.random() * 4);
     this.actor.play("walk");
@@ -368,6 +470,21 @@ export class Behavior {
 
     const rotated = rotateCss(this.grabOffset, this.roll);
     this.feet = { x: this.held.x + rotated.x, y: this.held.y + rotated.y };
+
+    // 오래 들고 있거나 세게 흔들면 버둥거린다
+    this.heldTime += dt;
+    const vy = dt > 0 ? (this.held.y - previous.y) / dt : 0;
+    this.shake = damp(this.shake, Math.hypot(vx, vy), 0.3, dt);
+    const wants = this.heldTime >= STRUGGLE_AFTER || this.shake >= STRUGGLE_SHAKE;
+    if (this.struggling) this.struggleTime += dt;
+    if (wants && !this.struggling) {
+      this.struggling = true;
+      this.struggleTime = 0;
+      this.actor.play("hang_struggle");
+    } else if (!wants && this.struggling && this.struggleTime >= STRUGGLE_MIN) {
+      this.struggling = false;
+      this.actor.play("hang");
+    }
   }
 
   private updateFall(dt: number, arena: Arena): void {
@@ -423,12 +540,70 @@ export class Behavior {
     this.actor.play("idle");
   }
 
+  /** 그 자리에 앉는다 (창 위면 걸터앉기, 바닥이면 다리 뻗고). sleepy면 존다. */
+  private sit(sleepy: boolean): void {
+    this.targetFacing = 0;
+    const edge = this.ledgeId !== null;
+    if (sleepy) {
+      this.enter("sleep");
+      this.actor.play(edge ? "sleep_edge" : "sleep_floor");
+    } else {
+      this.enter("sit", SIT_SECONDS.min + this.random() * (SIT_SECONDS.max - SIT_SECONDS.min));
+      this.actor.play(edge ? "sit_edge" : "sit_floor");
+    }
+  }
+
   // ---------------------------------------------------------------- 창 발판
+
+  /**
+   * 창 위치를 매끄럽게 따라간다. 창 위치는 폴링 간격(8ms)과 창이 실제로 움직이는 간격(보통 화면 주사율)이
+   * 렌더 프레임과 맞지 않아, 그대로 쓰면 어떤 프레임은 두 칸, 어떤 프레임은 0칸 움직여 뚝뚝 끊겨 보인다.
+   * 샘플 사이 간격으로 창 속도를 어림해 그 속도로 움직이고, 남는 오차는 40ms 반감기로 메운다.
+   * 일정한 속도면 거의 늦지 않는다. 크게 튀면(창 스냅·화면 전환) 바로 옮긴다.
+   */
+  private followWindow(raw: Point, dx: number, dy: number, dt: number): void {
+    this.ledgeSampleAge += dt;
+    if (dx !== 0 || dy !== 0) {
+      // 가만히 있던 창의 첫 변화로는 속도를 알 수 없다 (한 번에 옮긴 것일 수도 있다). 둘째 샘플부터 어림한다.
+      if (this.ledgeSampleAge <= FOLLOW_STOP_AFTER) {
+        const span = Math.max(this.ledgeSampleAge, 1 / 240);
+        const limit = (value: number) => clamp(value, -FOLLOW_MAX_SPEED, FOLLOW_MAX_SPEED);
+        this.ledgeEstimate = {
+          x: this.ledgeEstimate.x * 0.5 + limit(dx / span) * 0.5,
+          y: this.ledgeEstimate.y * 0.5 + limit(dy / span) * 0.5,
+        };
+      }
+      this.ledgeSampleAge = 0;
+    } else if (this.ledgeSampleAge > FOLLOW_STOP_AFTER) {
+      // 한동안 안 바뀌었으면 멈춘 것: 어림 속도를 빠르게 줄인다
+      const keep = Math.pow(0.5, dt / 0.03);
+      this.ledgeEstimate = { x: this.ledgeEstimate.x * keep, y: this.ledgeEstimate.y * keep };
+    }
+    const ahead = Math.min(this.ledgeSampleAge, FOLLOW_STOP_AFTER);
+    const predicted = { x: raw.x + this.ledgeEstimate.x * ahead, y: raw.y + this.ledgeEstimate.y * ahead };
+    const previous = { ...this.ledgeShown };
+    if (Math.hypot(predicted.x - this.ledgeShown.x, predicted.y - this.ledgeShown.y) > this.actor.heightPx * 0.5) {
+      this.ledgeShown = predicted;
+    } else {
+      const catchUp = 1 - Math.pow(0.5, dt / FOLLOW_CATCH_UP);
+      this.ledgeShown = {
+        x: this.ledgeShown.x + this.ledgeEstimate.x * dt,
+        y: this.ledgeShown.y + this.ledgeEstimate.y * dt,
+      };
+      this.ledgeShown.x += (predicted.x - this.ledgeShown.x) * catchUp;
+      this.ledgeShown.y += (predicted.y - this.ledgeShown.y) * catchUp;
+    }
+    this.feet.x += this.ledgeShown.x - previous.x;
+    this.feet.y = this.ledgeShown.y;
+  }
 
   private standOn(ledge: Ledge): void {
     this.ledgeId = ledge.id;
     this.ignoredLedge = null;
     this.ledgeAnchor = { x: ledge.windowX, y: ledge.y };
+    this.ledgeShown = { x: ledge.windowX, y: ledge.y };
+    this.ledgeEstimate = { x: 0, y: 0 };
+    this.ledgeSampleAge = Number.POSITIVE_INFINITY;
     this.ledgeSpeed = 0;
     this.ledgeVelocity = { x: 0, y: 0 };
     this.feet.y = ledge.y;
@@ -441,11 +616,11 @@ export class Behavior {
       this.drop({ x: 0, y: 0 });
       return;
     }
-    const dx = segments[0].windowX - this.ledgeAnchor.x;
-    const dy = segments[0].y - this.ledgeAnchor.y;
-    this.ledgeAnchor = { x: segments[0].windowX, y: segments[0].y };
-    this.feet.x += dx;
-    this.feet.y = segments[0].y;
+    const raw: Point = { x: segments[0].windowX, y: segments[0].y };
+    const dx = raw.x - this.ledgeAnchor.x;
+    const dy = raw.y - this.ledgeAnchor.y;
+    this.ledgeAnchor = raw;
+    this.followWindow(raw, dx, dy, dt);
 
     // 창 위치는 폴링 주기(30Hz)마다 계단식으로 바뀐다. 프레임마다의 순간 속도를 시간 가중
     // 지수 평균하면 프레임 수와 상관없이 실제 평균 속력이 된다.
