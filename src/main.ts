@@ -44,6 +44,8 @@ async function boot(target: HTMLCanvasElement): Promise<void> {
   stage.benchIdle = options.benchIdle;
   stage.dropOnWindow = options.dropOnWindow;
   stage.demoHang = options.demoHang;
+  // 검증용: 캔버스 뒤 단색(마젠타). 캡처에서 이 색 영역만 잘라 다른 창이 섞이지 않게 한다.
+  if (options.backdrop) target.style.background = "#ff00ff";
   if (options.motion) stage.playMotion(options.motion);
   const syncMotionMenu = () =>
     void registerMotions(

@@ -73,6 +73,8 @@ struct LaunchOptions {
     /// `--demo-hang`: 가상 커서로 잡아 좌우로 흔든다 (매달리기 흔들림 확인용)
     #[serde(rename = "demoHang")]
     demo_hang: bool,
+    /// `--backdrop`: 캐릭터 캔버스 뒤에 단색 배경 (화면 캡처 검증 때 다른 창이 섞이지 않게)
+    backdrop: bool,
 }
 
 #[tauri::command]
@@ -85,7 +87,8 @@ fn launch_options() -> LaunchOptions {
     let bench_idle = arguments.iter().any(|argument| argument == "--bench-idle");
     let drop_on_window = arguments.iter().any(|argument| argument == "--drop-on-window");
     let demo_hang = arguments.iter().any(|argument| argument == "--demo-hang");
-    LaunchOptions { motion, bench_idle, drop_on_window, demo_hang }
+    let backdrop = arguments.iter().any(|argument| argument == "--backdrop");
+    LaunchOptions { motion, bench_idle, drop_on_window, demo_hang, backdrop }
 }
 
 fn import_arguments() -> Vec<PathBuf> {

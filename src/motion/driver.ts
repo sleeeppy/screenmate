@@ -160,6 +160,12 @@ export class MotionDriver {
     this.lookAt = new LookAt(this.bones.has("両目"));
   }
 
+  /** 맨 위 모션의 현재 프레임 (30fps 기준). 재생 중인 모션이 없으면 null. */
+  get currentFrame(): number | null {
+    const top = this.playing[this.playing.length - 1];
+    return top ? motionFrame(top.motion, performance.now() / 1000 - top.startedAt) : null;
+  }
+
   get current(): Motion | null {
     return this.playing[this.playing.length - 1]?.motion ?? null;
   }

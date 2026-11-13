@@ -65,6 +65,7 @@ export const launchOptions = (): Promise<{
   benchIdle: boolean;
   dropOnWindow: boolean;
   demoHang: boolean;
+  backdrop: boolean;
 }> =>
   invoke("launch_options");
 

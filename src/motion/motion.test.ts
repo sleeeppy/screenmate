@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { DEFAULT_MORPH_NAMES } from "../mmd/morphMap.ts";
 import { MOTIONS } from "./clips/index.ts";
-import { WALK_SPEED_UNITS } from "./clips/walk.ts";
+import { isPassingFrame, WALK_SPEED_UNITS } from "./clips/walk.ts";
 import { KNEE_SOFT } from "./clips/pose.ts";
 import { defineMotion, k } from "./dsl.ts";
 import { motionFinished, motionFrame, samplePosition, sampleRotation, sampleWeight } from "./evaluate.ts";
@@ -191,4 +191,34 @@ test("해석적 다리 IK: 발목이 목표에 정확히 닿고, 무릎은 앞�
   const far = solveLeg([0, -20, 0], thigh, shin);
   const reach = rotateVec(far.hip, thigh)[1] + rotateVec(quatMul(far.hip, far.knee), shin)[1];
   assert.ok(reach < -9.2);
+});
+
+test("걷기: 두 발이 엇갈리는 프레임에서 디딤발은 몸 아래, 반대 발은 몸 가까이 있다", () => {
+  const walk = MOTIONS.find((motion) => motion.name === "walk")!;
+  const z = (bone: string, frame: number) => samplePosition(walk.bones.find((track) => track.name === bone)!, frame, walk, [0, 0, 0])[2];
+  for (const frame of [8.5, 23.5]) {
+    assert.ok(isPassingFrame(frame));
+    assert.ok(Math.abs(z("左足ＩＫ", frame)) < 0.6 && Math.abs(z("右足ＩＫ", frame)) < 0.6, `${frame}`);
+  }
+  assert.ok(!isPassingFrame(0) && !isPassingFrame(15));
+});
+
+test("걷기: 발을 뗄 때·디딜 때 발 속도가 끊기지 않는다 (걸음마다 멈칫하지 않음)", () => {
+  const walk = MOTIONS.find((motion) => motion.name === "walk")!;
+  const foot = walk.bones.find((track) => track.name === "左足ＩＫ")!;
+  const at = (frame: number) => samplePosition(foot, frame, walk, [0, 0, 0]);
+  // 디딤 끝(17)과 착지(30=0) 앞뒤 한 프레임 속도 비교
+  // 30프레임 = 0프레임 (반복). 그 뒤는 0→1로 본다.
+  const next = (frame: number) => (frame >= walk.length ? frame + 1 - walk.length : frame + 1);
+  const here = (frame: number) => (frame >= walk.length ? 0 : frame);
+  for (const contact of [17, 30]) {
+    const before = at(contact)[2] - at(contact - 1)[2];
+    const after = at(next(contact))[2] - at(here(contact))[2];
+    // 방향이 바로 뒤집히거나 멈추지 않는다 (예전: 0.259 → -0.064).
+    // 접점에서 속도는 이어지지만 한 프레임 평균에는 흔들기 감속이 섞여 2배까지 차이 난다.
+    assert.ok(after > before * 0.3 && after < before * 2.5, `${contact}프레임 앞뒤 속도 ${before.toFixed(3)} → ${after.toFixed(3)}`);
+    const up = at(next(contact))[1] - at(here(contact))[1];
+    const down = at(contact)[1] - at(contact - 1)[1];
+    assert.ok(Math.abs(up - down) < 0.35, `${contact}프레임 위아래 속도 ${down.toFixed(3)} → ${up.toFixed(3)}`);
+  }
 });

@@ -13,7 +13,7 @@ import { Behavior, rotateCss, type Arena } from "../behavior/behavior.ts";
 import { attachPointer } from "../behavior/interaction";
 import { computeLedges, type Ledge, type WindowRect } from "../behavior/platforms.ts";
 import { idle, motionByName } from "../motion/clips/index.ts";
-import { WALK_SPEED_UNITS } from "../motion/clips/walk.ts";
+import { isPassingFrame, WALK_SPEED_UNITS } from "../motion/clips/walk.ts";
 import type { GazeTarget } from "../motion/layers";
 import { aimAtBox, createStageCamera } from "./camera";
 import { FollowBox } from "./followBox";
@@ -125,6 +125,11 @@ export class Stage {
         return stage.walkSpeedPx();
       },
       play: (motion, onFinished) => this.playClip(motion, onFinished),
+      canStopWalking: () => {
+        const motion = this.character?.motion;
+        const frame = motion?.currentFrame ?? null;
+        return motion?.current?.name !== "walk" || frame === null || isPassingFrame(frame);
+      },
     });
     this.behavior.place(info.workArea.x + info.workArea.width / 2, this.arena());
     attachPointer({
