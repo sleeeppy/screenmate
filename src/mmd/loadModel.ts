@@ -1,4 +1,6 @@
 import { LoadAssetContainerAsync } from "@babylonjs/core/Loading/sceneLoader";
+import { BaseTexture } from "@babylonjs/core/Materials/Textures/baseTexture";
+import type { AbstractMesh } from "@babylonjs/core/Meshes/abstractMesh";
 import { Vector3 } from "@babylonjs/core/Maths/math.vector";
 import type { Mesh } from "@babylonjs/core/Meshes/mesh";
 import type { Scene } from "@babylonjs/core/scene";
@@ -62,6 +64,10 @@ export interface LoadedCharacter {
   /** 모션 재생기 */
   motion: MotionDriver;
   resetPhysics(): void;
+  /** 텍스처를 모두 읽고 재질 셰이더를 컴파일하면 풀린다 */
+  ready: Promise<void>;
+  /** 메시 보이기/숨기기 (숨겨도 애니메이션·물리는 계속 돈다) */
+  setVisible(visible: boolean): void;
   /** 윤곽선 두께 배율 (모델 edgeSize 기준). 프로필 overrides.edgeScale이 곱해진다. */
   setOutlineScale(scale: number): void;
   dispose(): void;
@@ -147,6 +153,10 @@ export async function loadCharacter(
     loadMs: Math.round(performance.now() - started),
     motion: driver,
     resetPhysics: () => model.initializePhysics(),
+    ready: whenReady(container.textures, container.meshes),
+    setVisible: (visible) => {
+      for (const part of container.meshes) part.isVisible = visible;
+    },
     setOutlineScale: (scale) => {
       for (const { material, base } of outlines) material.outlineWidth = base * scale * edgeScale;
     },
@@ -155,4 +165,16 @@ export async function loadCharacter(
       container.dispose();
     },
   };
+}
+
+/** 텍스처를 모두 읽고, 메시마다 재질 셰이더를 미리 컴파일한다 (실패해도 너무 오래 숨기지 않게 2초 상한). */
+function whenReady(textures: BaseTexture[], meshes: AbstractMesh[]): Promise<void> {
+  const textured = new Promise<void>((resolve) => BaseTexture.WhenAllReady(textures, () => resolve()));
+  const compiled = textured.then(() =>
+    Promise.all(
+      meshes.map((part) => (part.material ? part.material.forceCompilationAsync(part).catch(() => {}) : Promise.resolve())),
+    ).then(() => {}),
+  );
+  const timeout = new Promise<void>((resolve) => window.setTimeout(resolve, 2000));
+  return Promise.race([compiled, timeout]);
 }
