@@ -92,7 +92,8 @@ export default defineMotion({
     左足ＩＫ: foot(0),
     右足ＩＫ: foot(15),
     // 위아래 반동 + 디딤발 쪽으로 무게 이동
-    センター: sample((frame) => ({ py: -0.13 - 0.1 * bob(frame), px: 0.12 * stanceSide(frame) })),
+    // (KNEE_SOFT 0.1이 더해져 실제로는 -0.08 ~ -0.28)
+    センター: sample((frame) => ({ py: -0.08 - 0.1 * bob(frame), px: 0.12 * stanceSide(frame) })),
     // 골반: 앞으로 나온 다리 쪽이 앞으로 돌고, 흔드는 다리 쪽이 살짝 처진다
     下半身: sample((frame) => ({ ry: 6 * leftForward(frame), rz: 2.5 * stanceSide(frame) })),
     // 가슴은 골반과 반대로 돌고, 살짝 앞으로 기운다
