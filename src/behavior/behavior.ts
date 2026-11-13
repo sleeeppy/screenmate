@@ -52,6 +52,12 @@ const WALL_BOUNCE = 0.35;
 const SWAY_HZ = 0.85;
 const SWAY_DAMPING = 0.22;
 const SWAY_MAX = (38 * Math.PI) / 180;
+/** 진자 목표 기울기는 이 값에 부드럽게 다가간다 (tanh). SWAY_MAX에 딱 부딪혀 멈추지 않게. */
+const SWAY_TARGET_MAX = SWAY_MAX * 0.75;
+/** 끄는 속도에서 나온 목표 기울기를 이 반감기(초)로 거른다. 프레임 간격이 고르지 않으면 속도가 튄다. */
+const SWAY_TARGET_SMOOTH = 0.05;
+/** 진자를 이 고정 간격(초)으로 나눠 적분한다 (렌더 간격과 무관하게 매끄럽게) */
+const SWAY_STEP = 1 / 240;
 /** 끄는 속도 1000px/s당 기울기 */
 const SWAY_PER_SPEED = (20 * Math.PI) / 180 / 1000;
 /** 창 흔들림 판정: 최근 이 시간(s) 동안 창이 움직인 평균 속력으로 본다 */
@@ -83,6 +89,8 @@ export class Behavior {
   private stateLength = 0;
   private walkDirection: 1 | -1 = 1;
   private rollVelocity = 0;
+  /** 거른 진자 목표 기울기 */
+  private swayTarget = 0;
   private grabOffset: Point = { x: 0, y: 0 };
   private pointer: Point = { x: 0, y: 0 };
   private held: Point = { x: 0, y: 0 };
@@ -109,6 +117,17 @@ export class Behavior {
   }
 
   /** 박스를 넉넉하게(회전·매달림 포함) 잡아야 하는 상태인지 */
+  /**
+   * 몸이 매달린 기준점 (CSS px): 들고 있으면 잡은 점(커서), 아니면 가슴 높이.
+   * 물리용 월드 위치를 이 점 기준으로 줄인다 (engine.ts PHYSICS_TRAVEL). 발 기준으로 줄이면
+   * 들고 흔들 때 화면에서는 가만히 있는 목이 물리 세계에서는 크게 휘둘린다.
+   */
+  get pivot(): Point {
+    if (this.state === "held") return { ...this.held };
+    const chest = rotateCss({ x: 0, y: -this.actor.heightPx * 0.6 }, this.roll);
+    return { x: this.feet.x + chest.x, y: this.feet.y + chest.y };
+  }
+
   get airborne(): boolean {
     return this.state === "held" || this.state === "fall";
   }
@@ -201,6 +220,7 @@ export class Behavior {
     this.samples = [{ ...pointer, t: now }];
     this.velocity = { x: 0, y: 0 };
     this.rollVelocity = 0;
+    this.swayTarget = 0;
     this.targetFacing = 0;
     this.ledgeId = null;
     this.ignoredLedge = null;
@@ -314,11 +334,22 @@ export class Behavior {
     const vx = dt > 0 ? (this.held.x - previous.x) / dt : 0;
 
     // 진자: 끄는 방향 반대로 발이 처진다. 회전 중심은 잡은 점.
+    // 프레임 간격이 ±10%만 들쭉날쭉해도 한 프레임 속도로 만든 목표가 튀어 기울기가 떨렸다 (3차 차분 12배).
+    // 목표를 tanh로 눌러 거르고, 진자는 고정 간격으로 나눠 적분한다.
     const omega = 2 * Math.PI * SWAY_HZ;
-    const target = clamp(-vx * SWAY_PER_SPEED, -SWAY_MAX, SWAY_MAX);
-    const acceleration = -omega * omega * (this.roll - target) - 2 * SWAY_DAMPING * omega * this.rollVelocity;
-    this.rollVelocity += acceleration * dt;
-    this.roll = clamp(this.roll + this.rollVelocity * dt, -SWAY_MAX, SWAY_MAX);
+    const raw = -vx * SWAY_PER_SPEED;
+    this.swayTarget = damp(this.swayTarget, SWAY_TARGET_MAX * Math.tanh(raw / SWAY_TARGET_MAX), SWAY_TARGET_SMOOTH, dt);
+    const steps = Math.max(1, Math.ceil(dt / SWAY_STEP));
+    const h = dt / steps;
+    for (let step = 0; step < steps; step++) {
+      let acceleration = -omega * omega * (this.roll - this.swayTarget) - 2 * SWAY_DAMPING * omega * this.rollVelocity;
+      // 한계 근처에서는 단단한 스프링으로 밀어낸다 (딱 멈추는 대신)
+      const over = Math.abs(this.roll) - SWAY_MAX * 0.9;
+      if (over > 0) acceleration -= Math.sign(this.roll) * over * omega * omega * 8;
+      this.rollVelocity += acceleration * h;
+      this.roll += this.rollVelocity * h;
+    }
+    this.roll = clamp(this.roll, -SWAY_MAX, SWAY_MAX);
 
     const rotated = rotateCss(this.grabOffset, this.roll);
     this.feet = { x: this.held.x + rotated.x, y: this.held.y + rotated.y };
