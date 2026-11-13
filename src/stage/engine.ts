@@ -30,6 +30,13 @@ const LIGHT = { direction: [0.55, -0.8, 0.75] as [number, number, number], key: 
 const OUTLINE_SCALE = 0.45;
 /** 창 발판: 머리 위 여유(키 배수)와 최소 구간 너비(키 배수) */
 const LEDGE = { headroom: 1.1, minWidth: 0.45 };
+/**
+ * 물리(머리카락·옷)가 보는 캐릭터 이동량 비율.
+ * 화면에서는 끌기·던지기로 초당 수천 px(키 16인 모델에 초당 190 단위 = 사람으로 치면 초속 18m)를 움직여
+ * 치마·머리카락 강체가 뒤집히고 폭주했다. 월드 위치는 화면 위치의 이 비율만 쓰고, 카메라를 같은 만큼
+ * 옮겨 화면에는 그대로 보이게 한다. 관성으로 펄럭이는 느낌은 남는다. 회전(흔들림·몸 방향)은 그대로.
+ */
+const PHYSICS_TRAVEL = 0.15;
 /** 업로드할 텍스처의 최대 한 변 길이 */
 const MAX_TEXTURE_SIZE = 1024;
 
@@ -181,7 +188,7 @@ export class Stage {
         this.behavior.feet.x,
         this.behavior.feet.y,
       );
-      mesh.position.set(world.x, world.y, 0);
+      mesh.position.set(world.x * PHYSICS_TRAVEL, world.y * PHYSICS_TRAVEL, 0);
       mesh.rotation.set(0, this.behavior.facing, this.behavior.roll);
     }, {
       gaze: () => this.gazeTarget(),
@@ -323,7 +330,8 @@ export class Stage {
       return null;
     }
     const world = this.space.toWorld(cursor.x, cursor.y);
-    const head = character.mesh.position;
+    // 메시는 물리용 위치(PHYSICS_TRAVEL)에 있으므로 화면 기준 발 위치로 계산한다.
+    const head = this.space.toWorld(this.behavior.feet.x, this.behavior.feet.y);
     // 몸을 돌리고 있으면 화면 가로 거리가 모델 로컬 x로는 cos만큼 줄어든다.
     return {
       dx: (world.x - head.x) * Math.cos(this.behavior.facing),
@@ -351,7 +359,8 @@ export class Stage {
     this.space.pixelsPerUnit = this.heightPx / character.calibration.headY;
     const { feet, facing, roll } = this.behavior;
     const world = this.space.toWorld(feet.x, feet.y);
-    character.mesh.position.set(world.x, world.y, 0);
+    const offset = { x: world.x * (PHYSICS_TRAVEL - 1), y: world.y * (PHYSICS_TRAVEL - 1) };
+    character.mesh.position.set(world.x + offset.x, world.y + offset.y, 0);
     character.mesh.rotation.set(0, facing, roll);
     let rect;
     if (this.behavior.airborne) {
@@ -360,7 +369,7 @@ export class Stage {
     } else {
       rect = this.box.update(feet.x, feet.y, this.heightPx);
     }
-    aimAtBox(this.camera, rect, this.space);
+    aimAtBox(this.camera, rect, this.space, offset);
   }
 
   /**
