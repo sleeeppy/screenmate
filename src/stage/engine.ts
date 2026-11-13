@@ -7,10 +7,11 @@ import { Color3, Color4 } from "@babylonjs/core/Maths/math.color";
 import { Vector3 } from "@babylonjs/core/Maths/math.vector";
 import { Scene } from "@babylonjs/core/scene";
 import { SdefInjector } from "babylon-mmd/esm/Loader/sdefInjector";
-import { diag, onCursor, type CursorEvent, type ModelListing, type StageInfo } from "../ipc";
+import { diag, onCursor, onWindows, setPlatformRate, type CursorEvent, type ModelListing, type StageInfo } from "../ipc";
 import { createMmdWorld, loadCharacter, type LoadedCharacter, type MmdWorld } from "../mmd/loadModel";
 import { Behavior, rotateCss, type Arena } from "../behavior/behavior.ts";
 import { attachPointer } from "../behavior/interaction";
+import { computeLedges, type Ledge, type WindowRect } from "../behavior/platforms.ts";
 import { idle, motionByName } from "../motion/clips/index.ts";
 import { WALK_SPEED_UNITS } from "../motion/clips/walk.ts";
 import type { GazeTarget } from "../motion/layers";
@@ -27,6 +28,15 @@ const FREE_BOX = { size: 2.1, center: 0.72 };
 const LIGHT = { direction: [0.55, -0.8, 0.75] as [number, number, number], key: 0.78, fill: 0.18 };
 /** 키 260px일 때 윤곽선 배율 (모델 edgeSize 기준) */
 const OUTLINE_SCALE = 0.45;
+/** 창 발판: 머리 위 여유(키 배수)와 최소 구간 너비(키 배수) */
+const LEDGE = { headroom: 1.1, minWidth: 0.45 };
+/**
+ * 물리(머리카락·옷)가 보는 캐릭터 이동량 비율.
+ * 화면에서는 끌기·던지기로 초당 수천 px(키 16인 모델에 초당 190 단위 = 사람으로 치면 초속 18m)를 움직여
+ * 치마·머리카락 강체가 뒤집히고 폭주했다. 월드 위치는 화면 위치의 이 비율만 쓰고, 카메라를 같은 만큼
+ * 옮겨 화면에는 그대로 보이게 한다. 관성으로 펄럭이는 느낌은 남는다. 회전(흔들림·몸 방향)은 그대로.
+ */
+const PHYSICS_TRAVEL = 0.15;
 /** 업로드할 텍스처의 최대 한 변 길이 */
 const MAX_TEXTURE_SIZE = 1024;
 
@@ -42,6 +52,10 @@ export class Stage {
   private character: LoadedCharacter | null = null;
   private cursor: CursorEvent | null = null;
   private loadToken = 0;
+  /** 보이는 창 (앞 → 뒤)과 거기서 계산한 발판 */
+  private windows: WindowRect[] = [];
+  private ledges: Ledge[] = [];
+  private platformFast = false;
   private activeUntil = 0;
 
   /** 캐릭터 키(頭 본 높이) CSS px */
@@ -52,6 +66,12 @@ export class Stage {
   private lastFrame = 0;
   /** 성능 측정용: 커서를 무시하고 대기 fps로 고정 (`--bench-idle`) */
   benchIdle = false;
+  /** 검증용: 발판이 잡히면 가장 넓은 창 위에서 한 번 떨어뜨린다 (`--drop-on-window`) */
+  dropOnWindow = false;
+  /** 검증용: 가상 커서로 목 근처를 잡고 좌우로 흔든다 (`--demo-hang`) */
+  demoHang = false;
+  private demoStart = 0;
+  private demoGrabY = 0;
 
   constructor(
     private readonly canvas: HTMLCanvasElement,
@@ -114,6 +134,10 @@ export class Stage {
       },
     });
 
+    void onWindows((windows) => {
+      this.windows = windows;
+      this.updateLedges();
+    });
     void onCursor((event) => {
       this.cursor = event.near && !this.benchIdle ? event : null;
     });
@@ -124,6 +148,7 @@ export class Stage {
   updateInfo(info: StageInfo): void {
     this.info = info;
     this.space.stageHeight = info.height;
+    this.updateLedges();
     this.behavior.fit(this.arena());
     this.syncCharacter();
     this.character?.mesh.computeWorldMatrix(true);
@@ -135,6 +160,7 @@ export class Stage {
       return;
     }
     this.heightPx = heightPx;
+    this.updateLedges();
     // 월드 배율이 바뀌면 같은 화면 위치라도 월드 좌표가 달라진다 = 순간이동.
     // 새 위치를 반영한 뒤 강체를 다시 놓는다.
     this.syncCharacter();
@@ -162,9 +188,12 @@ export class Stage {
         this.behavior.feet.x,
         this.behavior.feet.y,
       );
-      mesh.position.set(world.x, world.y, 0);
+      mesh.position.set(world.x * PHYSICS_TRAVEL, world.y * PHYSICS_TRAVEL, 0);
       mesh.rotation.set(0, this.behavior.facing, this.behavior.roll);
-    }, { gaze: () => this.gazeTarget() });
+    }, {
+      gaze: () => this.gazeTarget(),
+      sway: () => (this.behavior.airborne ? this.behavior.roll : null),
+    });
     if (token !== this.loadToken) {
       loaded.dispose();
       return null;
@@ -204,7 +233,10 @@ export class Stage {
     this.wake();
     if (this.character) {
       const { x, y } = this.behavior.feet;
-      diag(`motion ${motion.name} state=${this.behavior.state} feet=${Math.round(x)},${Math.round(y)}`);
+      diag(
+        `motion ${motion.name} state=${this.behavior.state} feet=${Math.round(x)},${Math.round(y)} ` +
+          `ledge=${this.behavior.onLedge} ledges=${this.ledges.length}`,
+      );
     }
   }
 
@@ -217,8 +249,69 @@ export class Stage {
   }
 
   private arena(): Arena {
+    return { ...this.baseArena(), ledges: this.ledges };
+  }
+
+  private baseArena(): Arena {
     const area = this.info.workArea;
     return { ground: area.y + area.height, left: area.x, right: area.x + area.width, top: area.y };
+  }
+
+  /** 창 목록·화면·캐릭터 키가 바뀌면 발판을 다시 계산한다. */
+  private updateLedges(): void {
+    const { top, ground, left, right } = this.baseArena();
+    this.ledges = computeLedges(this.windows, {
+      top,
+      ground,
+      left,
+      right,
+      headroom: this.heightPx * LEDGE.headroom,
+      minWidth: this.heightPx * LEDGE.minWidth,
+    });
+    if (this.dropOnWindow && this.character && this.ledges.length > 0) {
+      this.dropOnWindow = false;
+      const widest = this.ledges.reduce((best, ledge) =>
+        ledge.right - ledge.left > best.right - best.left ? ledge : best,
+      );
+      this.behavior.dropFrom({ x: (widest.left + widest.right) / 2, y: widest.y - this.heightPx * 0.8 });
+      diag(`drop-on-window window=${widest.id} y=${Math.round(widest.y)} x=${Math.round(widest.left)}..${Math.round(widest.right)}`);
+    }
+  }
+
+  /**
+   * 검증용 가상 드래그: 3초 주기로 좌우 크게 흔들다(1.2초 주기) 멈췄다를 반복한다.
+   * 실제 마우스를 움직이지 않고 행동의 grab/drag만 부른다.
+   */
+  private driveDemoHang(now: number): void {
+    if (!this.character) return;
+    const area = this.info.workArea;
+    const centerX = area.x + area.width / 2;
+    const holdY = area.y + area.height - this.heightPx * 1.6;
+    if (this.behavior.state !== "held") {
+      const { x, y } = this.behavior.feet;
+      this.demoGrabY = y - this.heightPx * 0.92;
+      this.behavior.grab({ x, y: this.demoGrabY }, now);
+      this.demoStart = now;
+      return;
+    }
+    const t = (now - this.demoStart) / 1000;
+    const cycle = t % 6;
+    // 처음 1초는 들어 올리기, 1~4초 흔들기, 4~6초 멈춰서 흔들림이 가라앉는지
+    const lift = Math.min(1, t);
+    const swing = cycle >= 1 && cycle < 4 ? Math.sin(((cycle - 1) / 1.2) * Math.PI * 2) : 0;
+    const y = this.demoGrabY + (holdY - this.demoGrabY) * lift;
+    this.behavior.drag({ x: centerX + 220 * swing, y }, now);
+  }
+
+  /** 창 위에 있을 때만 Rust 창 폴링을 빠르게 */
+  private syncPlatformRate(): void {
+    const fast = this.behavior.onLedge;
+    if (fast !== this.platformFast) {
+      this.platformFast = fast;
+      const { x, y } = this.behavior.feet;
+      diag(`ledge ${fast ? "on" : "off"} state=${this.behavior.state} feet=${Math.round(x)},${Math.round(y)}`);
+      void setPlatformRate(fast).catch(() => {});
+    }
   }
 
   /** 트레이 체크 표시: 미리보기 중이면 그 모션, 아니면 자동 */
@@ -237,7 +330,8 @@ export class Stage {
       return null;
     }
     const world = this.space.toWorld(cursor.x, cursor.y);
-    const head = character.mesh.position;
+    // 메시는 물리용 위치(PHYSICS_TRAVEL)에 있으므로 화면 기준 발 위치로 계산한다.
+    const head = this.space.toWorld(this.behavior.feet.x, this.behavior.feet.y);
     // 몸을 돌리고 있으면 화면 가로 거리가 모델 로컬 x로는 cos만큼 줄어든다.
     return {
       dx: (world.x - head.x) * Math.cos(this.behavior.facing),
@@ -265,7 +359,8 @@ export class Stage {
     this.space.pixelsPerUnit = this.heightPx / character.calibration.headY;
     const { feet, facing, roll } = this.behavior;
     const world = this.space.toWorld(feet.x, feet.y);
-    character.mesh.position.set(world.x, world.y, 0);
+    const offset = { x: world.x * (PHYSICS_TRAVEL - 1), y: world.y * (PHYSICS_TRAVEL - 1) };
+    character.mesh.position.set(world.x + offset.x, world.y + offset.y, 0);
     character.mesh.rotation.set(0, facing, roll);
     let rect;
     if (this.behavior.airborne) {
@@ -274,7 +369,7 @@ export class Stage {
     } else {
       rect = this.box.update(feet.x, feet.y, this.heightPx);
     }
-    aimAtBox(this.camera, rect, this.space);
+    aimAtBox(this.camera, rect, this.space, offset);
   }
 
   /**
@@ -302,7 +397,9 @@ export class Stage {
       }
       const dt = this.lastFrame > 0 ? Math.min(0.1, (now - this.lastFrame) / 1000) : 1 / 60;
       this.lastFrame = now;
+      if (this.demoHang) this.driveDemoHang(now);
       this.behavior.update(dt, this.arena());
+      this.syncPlatformRate();
       this.syncCharacter();
       const before = performance.now();
       this.engine.beginFrame();

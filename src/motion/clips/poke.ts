@@ -9,7 +9,7 @@ export default defineMotion({
   length: 24,
   fadeIn: 0.05,
   bones: {
-    センター: [k(0), k(3, { pz: 0.6, py: 0.1, ease: "snap" }), k(12, { pz: 0.35 }), k(24)],
+    センター: [k(0), k(3, { pz: 0.6, py: 0.04, ease: "snap" }), k(12, { pz: 0.35 }), k(24)],
     上半身: [k(0), k(3, { rx: 9, ease: "snap" }), k(12, { rx: 5 }), k(24)],
     首: [k(0), k(3, { rx: 6, ease: "snap" }), k(24, { rx: -1.5 })],
     左腕: [

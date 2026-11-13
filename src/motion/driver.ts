@@ -7,7 +7,9 @@ import type { ResolvedMorphs } from "../mmd/morphMap";
 import { Blinker } from "./blink";
 import type { Motion } from "./dsl";
 import { motionFinished, motionFrame, sampleRotation, samplePosition, sampleWeight } from "./evaluate";
-import { Breathing, LookAt, type GazeTarget } from "./layers";
+import { Breathing, LookAt, SwingLag, type GazeTarget } from "./layers";
+import { KNEE_SOFT } from "./clips/pose.ts";
+import { quatConjugate, rotateVec, solveLeg } from "./legReach.ts";
 import { IDENTITY, quatCopy, quatFromEulerDeg, quatMul, quatSlerp, type Quat, type Vec3 } from "./math";
 
 /**
@@ -40,6 +42,16 @@ interface BoundBone {
   written: boolean;
 }
 
+/** 해석적 다리 IK로 푸는 한쪽 다리 */
+interface Leg {
+  hip: BoundBone;
+  knee: BoundBone;
+  ankle: BoundBone;
+  ik: BoundBone;
+  /** 이 다리의 足ＩＫ 솔버 (우리가 대신 푸므로 끈다) */
+  solverIndex: number;
+}
+
 interface Playing {
   motion: Motion;
   startedAt: number;
@@ -50,7 +62,27 @@ interface Playing {
 export interface DriverInputs {
   /** 시선 목표 (모델 로컬 단위, 머리 기준). 없으면 정면으로 돌아온다. */
   gaze(): GazeTarget | null;
+  /** 들렸거나 떨어지는 중이면 몸 기울기(라디안, 화면 반시계 +). 아니면 null. */
+  sway(): number | null;
 }
+
+/**
+ * 흔들림 2차 움직임을 본마다 얼마나 나눠 줄지 (SwingLag 각도 배율, 화면 평면 = 각 본의 Z축).
+ * 다리는 下半身 → 足으로 누적된다. 무릎은 크게 흔들릴수록 조금 더 굽힌다.
+ */
+const SWING_SHARE: Record<string, number> = {
+  下半身: 0.35,
+  左足: 0.35,
+  右足: 0.35,
+  // 종아리는 허벅지보다 한 번 더 늦게 (채찍처럼). 다리 끝은 몸보다 최대 약 17° 늦다.
+  左ひざ: 0.15,
+  右ひざ: 0.15,
+  上半身: 0.1,
+  首: 0.25,
+  左腕: 0.7,
+  右腕: 0.7,
+};
+const SWING_KNEE_BEND = 0.5;
 
 const scratchQuatB: Quat = [0, 0, 0, 1];
 const babylonQuat = new Quaternion();
@@ -66,9 +98,11 @@ export class MotionDriver {
   private readonly morphWeights = new Map<string, number>();
   private readonly writtenMorphs = new Set<number>();
   private readonly legIkSolvers: number[] = [];
+  private readonly legs: Leg[] = [];
   private readonly armCorrection: Record<string, Quat>;
   private readonly blinker = new Blinker();
   private readonly breathing = new Breathing();
+  private readonly swingLag = new SwingLag();
   private readonly lookAt: LookAt;
   private playing: Playing[] = [];
   private lastTime = -1;
@@ -94,6 +128,14 @@ export class MotionDriver {
           written: false,
         });
       }
+    }
+    for (const side of ["左", "右"]) {
+      const hip = this.bones.get(`${side}足`);
+      const knee = this.bones.get(`${side}ひざ`);
+      const ankle = this.bones.get(`${side}足首`);
+      const ik = this.bones.get(`${side}足ＩＫ`);
+      if (!hip || !knee || !ankle || !ik || ik.runtime.ikSolverIndex < 0) continue;
+      this.legs.push({ hip, knee, ankle, ik, solverIndex: ik.runtime.ikSolverIndex });
     }
     for (const name of LEG_IK_BONES) {
       const index = this.bones.get(name)?.runtime.ikSolverIndex ?? -1;
@@ -144,6 +186,7 @@ export class MotionDriver {
     this.mixClips(now, dt);
     this.applyCalibration();
     this.applyLayers(now, dt);
+    this.solveLegs();
     this.writeBones();
     this.writeMorphs(now);
     this.writeIk();
@@ -239,6 +282,16 @@ export class MotionDriver {
 
   private applyCalibration(): void {
     const scale = this.calibration.legScale > 0 ? this.calibration.legScale : 1;
+    // 무릎을 늘 살짝 굽힌다 (KNEE_SOFT 참고). 다리 IK를 끈 모션에도 똑같이 적용해 전환 때 튀지 않게.
+    const center = this.bones.get("センター");
+    if (center) {
+      if (!center.touched) {
+        quatCopy(IDENTITY, center.rotation);
+        center.position[0] = center.position[1] = center.position[2] = 0;
+        center.touched = true;
+      }
+      center.position[1] -= KNEE_SOFT;
+    }
     for (const bone of this.bones.values()) {
       if (!bone.touched) continue;
       if (SCALED_POSITION_BONES.has(bone.name)) {
@@ -248,6 +301,61 @@ export class MotionDriver {
       }
       const correction = this.armCorrection[bone.name];
       if (correction) quatMul(bone.rotation, correction, bone.rotation);
+    }
+  }
+
+  /**
+   * 이번 프레임 우리 값(회전·이동)으로 본의 모델 공간 회전·위치를 구한다 (부여 변환은 무시).
+   * 다리 IK를 풀 때 엉덩이·IK 목표 위치를 얻는 데만 쓴다.
+   */
+  private modelTransform(bone: BoundBone): { rotation: Quat; position: Vec3 } {
+    const chain: BoundBone[] = [];
+    let current: BoundBone | undefined = bone;
+    while (current) {
+      chain.push(current);
+      const parent: IMmdRuntimeBone | null = current.runtime.parentBone;
+      current = parent ? this.bones.get(parent.name) : undefined;
+    }
+    let rotation: Quat = [0, 0, 0, 1];
+    let position: Vec3 = [0, 0, 0];
+    for (let index = chain.length - 1; index >= 0; index--) {
+      const link = chain[index];
+      const local: Vec3 = [link.rest.x, link.rest.y, link.rest.z];
+      if (link.touched) {
+        local[0] += link.position[0];
+        local[1] += link.position[1];
+        local[2] += link.position[2];
+      }
+      const offset = rotateVec(rotation, local);
+      position = [position[0] + offset[0], position[1] + offset[1], position[2] + offset[2]];
+      if (link.touched) rotation = quatMul(rotation, link.rotation);
+    }
+    return { rotation, position };
+  }
+
+  /** 다리 IK를 쓰는 모션: 足ＩＫ 목표에 발목이 닿도록 足·ひざ를 해석적으로 푼다 (legReach.ts). */
+  private solveLegs(): void {
+    if (!(this.current?.legIk ?? true)) return;
+    for (const leg of this.legs) {
+      const parent = leg.hip.runtime.parentBone ? this.bones.get(leg.hip.runtime.parentBone.name) : undefined;
+      const frame = parent ? this.modelTransform(parent) : { rotation: [0, 0, 0, 1] as Quat, position: [0, 0, 0] as Vec3 };
+      const hipOffset = rotateVec(frame.rotation, [leg.hip.rest.x, leg.hip.rest.y, leg.hip.rest.z]);
+      const hip: Vec3 = [frame.position[0] + hipOffset[0], frame.position[1] + hipOffset[1], frame.position[2] + hipOffset[2]];
+      const target = this.modelTransform(leg.ik).position;
+      const toTarget = rotateVec(quatConjugate(frame.rotation), [target[0] - hip[0], target[1] - hip[1], target[2] - hip[2]]);
+      const solved = solveLeg(
+        toTarget,
+        [leg.knee.rest.x, leg.knee.rest.y, leg.knee.rest.z],
+        [leg.ankle.rest.x, leg.ankle.rest.y, leg.ankle.rest.z],
+      );
+      for (const [bone, rotation] of [
+        [leg.hip, solved.hip],
+        [leg.knee, solved.knee],
+      ] as const) {
+        quatCopy(rotation, bone.rotation);
+        bone.position[0] = bone.position[1] = bone.position[2] = 0;
+        bone.touched = true;
+      }
     }
   }
 
@@ -269,6 +377,17 @@ export class MotionDriver {
     addRotation("首", quatFromEulerDeg(gaze.pitch * 0.4, gaze.yaw * 0.4, 0, scratchQuatB));
     addRotation("頭", quatFromEulerDeg(gaze.pitch * 0.6, gaze.yaw * 0.6, 0, scratchQuatB));
     if (gaze.eyes) addRotation("両目", quatFromEulerDeg(gaze.eyes.pitch, gaze.eyes.yaw, 0, scratchQuatB));
+
+    // 흔들림 2차 움직임: 바닥에 서 있을 때는 0으로 가라앉는다.
+    const lag = this.swingLag.update(this.inputs.sway(), dt);
+    if (Math.abs(lag) > 0.05) {
+      for (const [name, share] of Object.entries(SWING_SHARE)) {
+        addRotation(name, quatFromEulerDeg(0, 0, lag * share, scratchQuatB));
+      }
+      const bend = -Math.abs(lag) * SWING_KNEE_BEND;
+      addRotation("左ひざ", quatFromEulerDeg(bend, 0, 0, scratchQuatB));
+      addRotation("右ひざ", quatFromEulerDeg(bend, 0, 0, scratchQuatB));
+    }
   }
 
   private writeBones(): void {
@@ -324,5 +443,7 @@ export class MotionDriver {
   private writeIk(): void {
     const enabled = (this.current?.legIk ?? true) ? 1 : 0;
     for (const index of this.legIkSolvers) this.model.ikSolverStates[index] = enabled;
+    // 足ＩＫ는 solveLegs()가 대신 푼다. 발끝(つま先ＩＫ)은 그대로 솔버가 발목 각도를 맞춘다.
+    for (const leg of this.legs) this.model.ikSolverStates[leg.solverIndex] = 0;
   }
 }

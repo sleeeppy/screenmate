@@ -20,9 +20,13 @@ export function createStageCamera(scene: Scene): FreeCamera {
   return camera;
 }
 
-/** 캔버스가 덮는 화면 영역(CSS px)과 정확히 같은 월드 영역을 보도록 카메라를 맞춘다. */
-export function aimAtBox(camera: FreeCamera, box: CssRect, space: StageSpace): void {
-  const center = space.toWorld(box.x + box.width / 2, box.y + box.height / 2);
+/**
+ * 캔버스가 덮는 화면 영역(CSS px)과 정확히 같은 월드 영역을 보도록 카메라를 맞춘다.
+ * offset: 캐릭터를 화면 위치와 다른 월드 위치에 둘 때(물리용, engine.ts PHYSICS_TRAVEL) 카메라도 같이 옮긴다.
+ */
+export function aimAtBox(camera: FreeCamera, box: CssRect, space: StageSpace, offset = { x: 0, y: 0 }): void {
+  const screen = space.toWorld(box.x + box.width / 2, box.y + box.height / 2);
+  const center = { x: screen.x + offset.x, y: screen.y + offset.y };
   camera.position.set(center.x, center.y, CAMERA_Z);
   camera.setTarget(new Vector3(center.x, center.y, 0));
   const halfWidth = box.width / (2 * space.pixelsPerUnit);

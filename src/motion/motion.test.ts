@@ -2,9 +2,13 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { DEFAULT_MORPH_NAMES } from "../mmd/morphMap.ts";
 import { MOTIONS } from "./clips/index.ts";
+import { WALK_SPEED_UNITS } from "./clips/walk.ts";
+import { KNEE_SOFT } from "./clips/pose.ts";
 import { defineMotion, k } from "./dsl.ts";
 import { motionFinished, motionFrame, samplePosition, sampleRotation, sampleWeight } from "./evaluate.ts";
 import { bezierEase, quatFromEulerDeg, quatMul, quatSlerp, type Quat } from "./math.ts";
+import { SwingLag } from "./layers.ts";
+import { kneeBendForReach, rotateVec, solveLeg } from "./legReach.ts";
 import { encodeShiftJis, interpolationBytes, motionToVmd } from "./vmd.ts";
 
 const close = (actual: number, expected: number, epsilon = 1e-4) =>
@@ -103,6 +107,8 @@ test("걷기: 디딤발이 일정 속도로 뒤로 가서 몸 이동 속도와 �
   const z = (frame: number) => samplePosition(left, frame, walk, [0, 0, 0])[2];
   close(z(7.5) - z(0), z(15) - z(7.5), 1e-3);
   assert.ok(z(15) > z(0)); // 뒤(+z)로
+  // 디딤발 속도 = 몸 이동 속도 상수 (프레임 30fps)
+  close((z(15) - z(0)) / (15 / 30), WALK_SPEED_UNITS, 1e-3);
   const lift = (frame: number) => samplePosition(left, frame, walk, [0, 0, 0])[1];
   assert.ok(lift(23) > 0.5);
   close(lift(7), 0);
@@ -124,4 +130,65 @@ test("VMD: 헤더, 프레임 수, 보간 64바이트 배치", () => {
   assert.equal(interpolation[4], 0); // X_y1
   assert.equal(interpolation[16], 64); // 1행 = Y_x1부터
   assert.equal(interpolation[63], 0);
+});
+
+test("흔들림 2차 움직임: 몸이 반시계로 돌기 시작하면 팔다리는 시계 방향으로 처졌다가 가라앉는다", () => {
+  const lag = new SwingLag();
+  const dt = 1 / 60;
+  let roll = 0;
+  lag.update(roll, dt);
+  let min = 0;
+  for (let i = 0; i < 12; i++) {
+    roll += 0.02; // 1.2 rad/s 반시계
+    min = Math.min(min, lag.update(roll, dt));
+  }
+  assert.ok(min < -3, `처짐 ${min}°`);
+  let last = 0;
+  for (let i = 0; i < 240; i++) last = lag.update(roll, dt); // 4초 정지
+  assert.ok(Math.abs(last) < 0.5, `가라앉음 ${last}°`);
+  // 서 있으면(null) 입력 없이 가라앉기만 한다
+  assert.ok(Math.abs(lag.update(null, dt)) < 0.5);
+});
+
+test("다리 IK를 쓰는 모션은 다리가 완전히 펴지지 않는다 (센터가 늘 기본 높이보다 낮음)", () => {
+  for (const motion of MOTIONS.filter((candidate) => candidate.legIk)) {
+    const center = motion.bones.find((track) => track.name === "センター");
+    for (let frame = 0; frame <= motion.length; frame += 0.5) {
+      const py = center ? samplePosition(center, frame, motion, [0, 0, 0])[1] : 0;
+      assert.ok(py - KNEE_SOFT <= -0.05, `${motion.name} ${frame}프레임 센터 ${(py - KNEE_SOFT).toFixed(3)}`);
+    }
+  }
+});
+
+test("무릎 미리 굽히기: 곧은 다리는 최소 각, 가까울수록 더 굽히고 삼각형 관계를 만족한다", () => {
+  const thigh = 4.6;
+  const shin = 4.4;
+  close(kneeBendForReach(thigh, shin, thigh + shin), (2 * Math.PI) / 180);
+  close(kneeBendForReach(thigh, shin, 20), (2 * Math.PI) / 180); // 닿지 않으면 편 채로
+  const bend = kneeBendForReach(thigh, shin, 8.6);
+  assert.ok(bend > kneeBendForReach(thigh, shin, 8.9));
+  // 굽힌 무릎에서 엉덩이~발목 거리 = 요청 거리 (코사인 법칙)
+  const inner = Math.PI - bend;
+  close(Math.sqrt(thigh * thigh + shin * shin - 2 * thigh * shin * Math.cos(inner)), 8.6, 1e-6);
+});
+
+test("해석적 다리 IK: 발목이 목표에 정확히 닿고, 무릎은 앞으로 굽는다", () => {
+  // DIVA 린 기본 자세 값 (足→ひざ, ひざ→足首)
+  const thigh: [number, number, number] = [-0.104, -4.631, -0.02];
+  const shin: [number, number, number] = [0.05, -4.681, 0.104];
+  for (const target of [
+    [0.05, -9.17, 0.08], // 서 있기 (살짝 굽힘)
+    [0.05, -8.0, -1.5], // 걷기 앞발
+    [0.3, -7.2, 1.2], // 뒤로 + 옆
+  ] as [number, number, number][]) {
+    const { hip, knee } = solveLeg(target, thigh, shin);
+    const kneePos = rotateVec(hip, thigh);
+    const ankle = rotateVec(quatMul(hip, knee), shin);
+    for (let axis = 0; axis < 3; axis++) close(kneePos[axis] + ankle[axis], target[axis], 1e-6);
+    assert.ok(kneePos[2] < 0.2, `무릎이 앞(-z)으로 (z=${kneePos[2].toFixed(3)})`);
+  }
+  // 닿지 않으면 목표 방향으로 쭉 편다
+  const far = solveLeg([0, -20, 0], thigh, shin);
+  const reach = rotateVec(far.hip, thigh)[1] + rotateVec(quatMul(far.hip, far.knee), shin)[1];
+  assert.ok(reach < -9.2);
 });

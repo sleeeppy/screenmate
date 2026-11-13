@@ -33,10 +33,12 @@ export async function createMmdWorld(scene: Scene): Promise<MmdWorld> {
   const wasm = await GetMmdWasmInstance(new MmdWasmInstanceTypeSPR());
   const physics = new MultiPhysicsRuntime(wasm);
   physics.setGravity(new Vector3(0, -98, 0));
-  // 실제 경과 시간으로 1/60초 고정 스텝을 돌린다. 렌더 fps(72·29)와 무관하게 물리 속도가 같다.
+  // 실제 경과 시간으로 1/120초 고정 스텝을 돌린다. 렌더 fps(72·29)와 무관하게 물리 속도가 같다.
+  // 1/60이면 Sour 치마(가벼운 강체 112개를 ±1° 조인트로 묶음)가 서 있기만 해도 프레임마다 최대 0.7 단위씩
+  // 튀었다. 1/120에서 최대 0.17로 줄었다 (1/240은 더 나아지지 않음). 렌더가 0.1초까지 밀려도 따라가도록 12스텝.
   physics.useDeltaForWorldStep = true;
-  physics.fixedTimeStep = 1 / 60;
-  physics.maxSubSteps = 3;
+  physics.fixedTimeStep = 1 / 120;
+  physics.maxSubSteps = 12;
   physics.register(scene);
 
   const runtime = new MmdRuntime(scene, new MmdBulletPhysics(physics));

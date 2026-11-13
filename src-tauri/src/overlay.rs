@@ -44,6 +44,14 @@ pub struct OverlayState {
     interest: Mutex<Option<CssRect>>,
 }
 
+impl OverlayState {
+    /// 오버레이 창 왼쪽 위(물리 px)와 배율
+    pub fn origin(&self) -> (i32, i32, f64) {
+        let geometry = *self.geometry.lock().unwrap();
+        (geometry.x, geometry.y, geometry.scale)
+    }
+}
+
 #[derive(Clone, serde::Serialize)]
 struct CursorPayload {
     x: f64,

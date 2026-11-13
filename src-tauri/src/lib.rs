@@ -1,5 +1,6 @@
 mod models;
 mod overlay;
+mod platforms;
 mod settings;
 mod tray;
 
@@ -17,6 +18,7 @@ pub fn run() {
             overlay::set_interest_rect,
             overlay::set_click_through,
             overlay::stage_info,
+            platforms::set_platform_rate,
             models::list_models,
             models::save_model_cache,
             models::save_profile,
@@ -43,6 +45,7 @@ pub fn run() {
 
             let window = app.get_webview_window("main").expect("main window is missing");
             overlay::install(&handle, &window)?;
+            platforms::install(&handle);
             tray::install(&handle)?;
             window.show()?;
             Ok(())
@@ -64,6 +67,12 @@ struct LaunchOptions {
     /// `--bench-idle`: 커서를 무시하고 대기 fps로 고정 (성능 측정용)
     #[serde(rename = "benchIdle")]
     bench_idle: bool,
+    /// `--drop-on-window`: 창 발판이 잡히면 가장 넓은 창 위에서 떨어뜨린다 (M5 검증용)
+    #[serde(rename = "dropOnWindow")]
+    drop_on_window: bool,
+    /// `--demo-hang`: 가상 커서로 잡아 좌우로 흔든다 (매달리기 흔들림 확인용)
+    #[serde(rename = "demoHang")]
+    demo_hang: bool,
 }
 
 #[tauri::command]
@@ -74,7 +83,9 @@ fn launch_options() -> LaunchOptions {
         .position(|argument| argument == "--motion")
         .and_then(|index| arguments.get(index + 1).cloned());
     let bench_idle = arguments.iter().any(|argument| argument == "--bench-idle");
-    LaunchOptions { motion, bench_idle }
+    let drop_on_window = arguments.iter().any(|argument| argument == "--drop-on-window");
+    let demo_hang = arguments.iter().any(|argument| argument == "--demo-hang");
+    LaunchOptions { motion, bench_idle, drop_on_window, demo_hang }
 }
 
 fn import_arguments() -> Vec<PathBuf> {
