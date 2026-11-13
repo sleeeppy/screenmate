@@ -58,8 +58,12 @@ export default defineConfig({
     exclude: ["@babylonjs/core", "babylon-mmd"],
   },
   build: {
+    // 오버레이(index.html)와 설정 창(settings.html) 두 페이지
+    rollupOptions: {
+      input: { main: "index.html", settings: "settings.html" },
+    },
     target: process.env.TAURI_ENV_PLATFORM === "windows" ? "chrome105" : "safari13",
-    minify: debug ? false : "esbuild",
+    minify: !debug, // Vite 8 기본 최소화(oxc). "esbuild"는 esbuild를 따로 깔아야 해서 빌드가 실패했다
     sourcemap: debug,
   },
 });

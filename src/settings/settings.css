@@ -1,0 +1,994 @@
+/*
+ * ScreenMate 설정 창. macOS 다크 앱 느낌 (WallpaperMachine 참고):
+ * 어두운 바탕, 둥근 카드, 파란 강조색, 가운데 분할 탭, 오른쪽 상세 패널, 아래 상태 막대.
+ */
+:root {
+  color-scheme: dark;
+  --bg: #1d1d20;
+  --panel: #232327;
+  --card: #2a2a2f;
+  --card-hover: #303036;
+  --field: #18181b;
+  --line: rgba(255, 255, 255, 0.08);
+  --line-strong: rgba(255, 255, 255, 0.14);
+  --text: #ececef;
+  --muted: #9c9ca6;
+  --faint: #6f6f78;
+  --accent: #3b7cf6;
+  --accent-strong: #2f6be0;
+  --accent-soft: rgba(59, 124, 246, 0.16);
+  --pill: #313137;
+  --danger: #ff5f57;
+  --ok: #34c759;
+  --radius: 12px;
+  --radius-sm: 8px;
+  --header: 54px;
+  --footer: 58px;
+  --inspector: 340px;
+  font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Segoe UI", system-ui, sans-serif;
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: default;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  border: none;
+  background: none;
+  cursor: default;
+}
+
+input {
+  font: inherit;
+  color: inherit;
+}
+
+svg {
+  display: block;
+}
+
+/* ------------------------------------------------------------------ 뼈대 */
+
+.app {
+  display: grid;
+  grid-template-rows: var(--header) 1fr;
+  height: 100vh;
+}
+
+.titlebar {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  padding: 0 16px 0 100px; /* 왼쪽은 신호등 버튼 자리 (window.rs traffic_light_position) */
+  border-bottom: 1px solid var(--line);
+  background: var(--bg);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 650;
+  font-size: 14px;
+  pointer-events: none;
+}
+
+.brand img {
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+}
+
+.brand .version {
+  color: var(--faint);
+  font-weight: 500;
+  font-size: 12px;
+}
+
+.segmented {
+  display: inline-flex;
+  padding: 3px;
+  gap: 2px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+}
+
+.segmented button {
+  padding: 5px 14px;
+  border-radius: 999px;
+  color: var(--muted);
+  font-weight: 560;
+  transition: background 0.15s, color 0.15s;
+}
+
+.segmented button:hover {
+  color: var(--text);
+}
+
+.segmented button.active {
+  background: var(--accent-soft);
+  color: #8fb4ff;
+}
+
+.titlebar .tools {
+  justify-self: end;
+  display: flex;
+  gap: 6px;
+}
+
+.body {
+  display: grid;
+  grid-template-columns: 1fr var(--inspector);
+  min-height: 0;
+}
+
+.body.wide {
+  grid-template-columns: 1fr;
+}
+
+.content {
+  min-height: 0;
+  overflow: auto;
+  padding: 16px 18px 24px;
+}
+
+.inspector {
+  min-height: 0;
+  overflow: auto;
+  border-left: 1px solid var(--line);
+  background: var(--panel);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.body.wide .inspector {
+  display: none;
+}
+
+/* 패널이 길어도 위 항목이 눌리지 않고 스크롤된다 */
+.inspector > * {
+  flex: none;
+}
+
+/* ------------------------------------------------------------------ 공통 조각 */
+
+.icon-button {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  color: var(--muted);
+}
+
+.icon-button:hover {
+  color: var(--text);
+  background: var(--card-hover);
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 12px;
+  border-radius: 999px;
+  background: var(--pill);
+  color: var(--text);
+  font-weight: 540;
+  white-space: nowrap;
+}
+
+.chip:hover {
+  background: #3a3a41;
+}
+
+.chip.active {
+  background: var(--accent-soft);
+  color: #8fb4ff;
+}
+
+.chip .count {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.chip.active .count {
+  color: #8fb4ff;
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+
+.toolbar .spacer {
+  flex: 1;
+}
+
+.search {
+  position: relative;
+  margin-bottom: 12px;
+}
+
+.search svg {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--faint);
+}
+
+.search input {
+  width: 100%;
+  height: 36px;
+  padding: 0 12px 0 34px;
+  border-radius: 10px;
+  border: 1.5px solid var(--line-strong);
+  background: var(--field);
+  outline: none;
+}
+
+.search input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(59, 124, 246, 0.18);
+}
+
+.section-title {
+  margin: 18px 2px 10px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.section-title:first-child {
+  margin-top: 4px;
+}
+
+.empty {
+  padding: 60px 20px;
+  text-align: center;
+  color: var(--muted);
+  line-height: 1.7;
+}
+
+.button {
+  height: 34px;
+  padding: 0 14px;
+  border-radius: var(--radius-sm);
+  background: var(--pill);
+  font-weight: 580;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.button:hover {
+  background: #3a3a41;
+}
+
+.button.primary {
+  background: var(--accent);
+  color: white;
+}
+
+.button.primary:hover {
+  background: var(--accent-strong);
+}
+
+.button.primary:disabled {
+  background: #2c3d5e;
+  color: #a9bde4;
+}
+
+.button.danger {
+  color: var(--danger);
+}
+
+.button.block {
+  width: 100%;
+}
+
+/* ------------------------------------------------------------------ 카드 격자 */
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 16px 14px;
+}
+
+.tile {
+  text-align: left;
+  border-radius: var(--radius);
+}
+
+.tile .art {
+  position: relative;
+  isolation: isolate;
+  aspect-ratio: 3 / 4; /* 서 있는 캐릭터에 맞춘 세로 카드 (thumbnails.ts CARD_WIDTH×CARD_HEIGHT) */
+  border-radius: var(--radius);
+  overflow: hidden;
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+  transition: transform 0.12s, outline-color 0.12s;
+}
+
+.tile:hover .art {
+  transform: translateY(-1px);
+}
+
+.tile.active .art {
+  outline-color: var(--accent);
+}
+
+.tile .art img {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: top center;
+  transition: transform 0.25s ease;
+}
+
+.tile:hover .art img {
+  transform: scale(1.035);
+}
+
+.tile .name {
+  margin-top: 8px;
+  font-weight: 620;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tile .meta {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.badge {
+  position: absolute;
+  z-index: 2;
+  left: 8px;
+  top: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: white;
+  font-size: 11px;
+  font-weight: 650;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+.placeholder {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  overflow: hidden;
+}
+
+/* 썸네일을 만드는 동안 지나가는 빛 */
+.shimmer {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(105deg, transparent 30%, rgba(255, 255, 255, 0.1) 50%, transparent 70%);
+  transform: translateX(-100%);
+  animation: shimmer 1.4s ease-in-out infinite;
+}
+
+@keyframes shimmer {
+  to {
+    transform: translateX(100%);
+  }
+}
+
+/*
+ * 모델 카드 배경: 썸네일에서 뽑은 옷 색 (main.ts lookStyle이 --base·--top·--glow·--glow2·--tilt를 준다).
+ * 캐릭터 뒤에 빛이 비치고, 가장자리는 살짝 어둡게.
+ */
+.look {
+  --glow-y: 30%;
+  background:
+    radial-gradient(62% 48% at 50% var(--glow-y), var(--glow), transparent 72%),
+    radial-gradient(70% 55% at 92% 105%, var(--glow2), transparent 70%),
+    linear-gradient(var(--tilt, 150deg), var(--top), var(--base) 78%);
+}
+
+.look::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.07), transparent 28%),
+    radial-gradient(120% 95% at 50% 38%, transparent 58%, rgba(0, 0, 0, 0.34));
+  pointer-events: none;
+}
+
+.look::after {
+  content: "";
+  position: absolute;
+  z-index: 3;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.07);
+  pointer-events: none;
+}
+
+/* 모션 카드: 그림 대신 아이콘 */
+.tile.motion .art {
+  display: grid;
+  place-items: center;
+  color: #c9d6ff;
+}
+
+.tile.motion .art svg {
+  width: 46%;
+  height: 46%;
+  opacity: 0.92;
+}
+
+/* ------------------------------------------------------------------ 상세 패널 */
+
+.preview {
+  --glow-y: 24%;
+  position: relative;
+  aspect-ratio: 1;
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.preview img {
+  position: absolute;
+  z-index: 1;
+  inset: 3% 0 0;
+  width: 100%;
+  height: 97%;
+  object-fit: contain;
+  object-position: bottom center;
+  filter: drop-shadow(0 10px 18px rgba(0, 0, 0, 0.35));
+}
+
+.inspector .title {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.inspector h2 {
+  margin: 2px 0 0;
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inspector .sub {
+  color: var(--muted);
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kbd {
+  margin-left: 4px;
+  padding: 0 5px;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.18);
+  font-size: 11px;
+  line-height: 17px;
+}
+
+.row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.tag {
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: var(--pill);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 560;
+}
+
+.panel {
+  border-radius: var(--radius);
+  background: var(--card);
+  border: 1px solid var(--line);
+  overflow: hidden;
+}
+
+.panel-head {
+  padding: 12px 14px 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 620;
+}
+
+.panel-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+}
+
+.panel-row + .panel-row {
+  border-top: 1px solid var(--line);
+}
+
+.panel-row .text {
+  flex: 1;
+  min-width: 0;
+}
+
+.panel-row .label {
+  font-weight: 600;
+}
+
+.panel-row .hint {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.status-line {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  padding: 12px 14px;
+  line-height: 1.5;
+}
+
+.status-line .dot {
+  flex: none;
+  margin-top: 5px;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--ok);
+}
+
+.status-line .dot.off {
+  background: var(--faint);
+}
+
+.kv {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px 14px;
+  padding: 12px 14px;
+  font-size: 12px;
+}
+
+.kv dt {
+  color: var(--muted);
+}
+
+.kv dd {
+  margin: 0;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 토글 스위치 (macOS 느낌). 누르는 동안 손잡이가 옆으로 늘어나고, 놓으면 살짝 튕기며 넘어간다 */
+.switch {
+  position: relative;
+  flex: none;
+  width: 38px;
+  height: 22px;
+  border-radius: 999px;
+  background: #4a4a52;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+  transition: background-color 0.25s ease, box-shadow 0.25s ease;
+}
+
+.switch::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: white;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+  transition:
+    left 0.28s cubic-bezier(0.34, 1.4, 0.64, 1),
+    width 0.18s ease;
+}
+
+.switch.on {
+  background: var(--accent);
+  box-shadow: 0 0 0 3px rgba(59, 124, 246, 0.14);
+}
+
+.switch.on::after {
+  left: 18px;
+}
+
+.panel-row.clickable:active .switch::after {
+  width: 23px;
+}
+
+.panel-row.clickable:active .switch.on::after {
+  left: 13px;
+}
+
+/* 작은 분할 선택 */
+.choices {
+  display: inline-flex;
+  padding: 2px;
+  gap: 2px;
+  border-radius: 9px;
+  background: var(--field);
+  border: 1px solid var(--line);
+}
+
+.choices button {
+  padding: 5px 11px;
+  border-radius: 7px;
+  color: var(--muted);
+  font-weight: 560;
+  transition: background-color 0.2s ease, color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.choices button:not(.active):hover {
+  color: var(--text);
+}
+
+.choices button.active {
+  background: var(--pill);
+  color: var(--text);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+}
+
+.slider-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 14px 14px;
+}
+
+/* 크기 슬라이더: 잡기 쉬운 높이, 채운 부분(--fill은 main.ts가 준다) */
+.slider-row input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  flex: 1;
+  height: 24px;
+  margin: 0;
+  background: transparent;
+  outline: none;
+}
+
+.slider-row input[type="range"]::-webkit-slider-runnable-track {
+  height: 6px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent) var(--fill, 50%), #45454d var(--fill, 50%));
+}
+
+.slider-row input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 20px;
+  height: 20px;
+  margin-top: -7px;
+  border-radius: 999px;
+  background: white;
+  box-shadow:
+    0 1px 4px rgba(0, 0, 0, 0.4),
+    0 0 0 0 rgba(59, 124, 246, 0);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.slider-row input[type="range"]:hover::-webkit-slider-thumb {
+  transform: scale(1.08);
+}
+
+.slider-row input[type="range"]:active::-webkit-slider-thumb,
+.slider-row input[type="range"]:focus-visible::-webkit-slider-thumb {
+  transform: scale(1.12);
+  box-shadow:
+    0 1px 4px rgba(0, 0, 0, 0.4),
+    0 0 0 6px rgba(59, 124, 246, 0.25);
+}
+
+.slider-row .value {
+  width: 54px;
+  text-align: right;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.settings-page {
+  max-width: 720px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.settings-page h1 {
+  margin: 6px 2px 2px;
+  font-size: 22px;
+  letter-spacing: -0.01em;
+}
+
+.settings-page .lead {
+  margin: 0 2px 6px;
+  color: var(--muted);
+}
+
+/* 알림 */
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%) translateY(10px);
+  padding: 9px 14px;
+  border-radius: 10px;
+  background: #34343b;
+  border: 1px solid var(--line-strong);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.18s, transform 0.18s;
+}
+
+.toast.show {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+/* ------------------------------------------------------------------ 폴더·경로 */
+
+.crumbs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  margin: 2px 0 14px;
+  font-size: 15px;
+  font-weight: 680;
+}
+
+.crumbs .sep {
+  color: var(--faint);
+}
+
+.crumbs .count {
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--pill);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.crumbs .progress {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.spinner.small {
+  width: 12px;
+  height: 12px;
+  border-width: 2px;
+}
+
+.crumb-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  height: 30px;
+  padding: 0 10px 0 6px;
+  border-radius: 999px;
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.crumb-back:hover {
+  background: var(--card);
+  color: var(--text);
+}
+
+/* 폴더 카드: 안에 든 모델들을 칸으로 나눠 한 장에 (main.ts mosaic) */
+.mosaic {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  display: grid;
+  gap: 2px;
+  background: var(--bg);
+}
+
+.mosaic.n1 {
+  grid-template: 1fr / 1fr;
+}
+
+.mosaic.n2 {
+  grid-template: 1fr / 1fr 1fr;
+}
+
+.mosaic.n3 {
+  grid-template: 1fr 1fr / 1.15fr 1fr;
+}
+
+.mosaic.n3 .cell:first-child {
+  grid-row: span 2;
+}
+
+.mosaic.n4 {
+  grid-template: 1fr 1fr / 1fr 1fr;
+}
+
+.mosaic .cell {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.mosaic .cell.tall img {
+  inset: 4% 0 0;
+  height: 96%;
+}
+
+/* 폴더 열고 닫기 (main.ts render가 폴더가 바뀔 때 붙인다) */
+.content.enter-forward > *,
+.content.enter-back > * {
+  animation: enter-forward 0.24s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.content.enter-back > * {
+  animation-name: enter-back;
+}
+
+.content.enter-forward .grid > .tile,
+.content.enter-back .grid > .tile {
+  animation: tile-in 0.28s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.content .grid > .tile:nth-child(2) { animation-delay: 0.03s; }
+.content .grid > .tile:nth-child(3) { animation-delay: 0.06s; }
+.content .grid > .tile:nth-child(4) { animation-delay: 0.09s; }
+.content .grid > .tile:nth-child(n + 5) { animation-delay: 0.12s; }
+
+@keyframes enter-forward {
+  from {
+    opacity: 0;
+    transform: translateX(14px);
+  }
+}
+
+@keyframes enter-back {
+  from {
+    opacity: 0;
+    transform: translateX(-14px);
+  }
+}
+
+@keyframes tile-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.98);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .content.enter-forward > *,
+  .content.enter-back > *,
+  .content.enter-forward .grid > .tile,
+  .content.enter-back .grid > .tile {
+    animation: none;
+  }
+}
+
+/* 칸이 작아 위에 두면 얼굴을 가린다 */
+.tile.folder .badge {
+  top: auto;
+  bottom: 8px;
+}
+
+.mosaic .more {
+  position: absolute;
+  z-index: 2;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.5);
+  font-size: 18px;
+  font-weight: 700;
+}
+
+/* 고른(오른쪽에 보이는) 모델 */
+.tile.picked:not(.active) .art {
+  outline-color: rgba(255, 255, 255, 0.35);
+}
+
+.spinner {
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  border: 2.5px solid rgba(255, 255, 255, 0.18);
+  border-top-color: rgba(255, 255, 255, 0.75);
+  animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.panel-row.clickable:hover {
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.panel-row.stacked {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+}
+
+.panel-row.stacked .choices {
+  align-self: flex-start;
+}
+
+.inspector .panel {
+  margin-top: 4px;
+}

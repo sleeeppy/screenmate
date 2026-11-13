@@ -4,7 +4,8 @@
 //! ├─ models\<package>\...      가져온 폴더 사본 (readme 포함, 이름 복원됨)
 //! ├─ models\registry.json      모델 목록
 //! ├─ cache\<id>.bpmx           babylon-mmd 최적화 포맷 캐시
-//! └─ profiles\<id>.json        자동 보정값 + 사용자 덮어쓰기
+//! ├─ profiles\<id>.json        자동 보정값 + 사용자 덮어쓰기
+//! └─ thumbnails\v3\<id>.*      설정 창 카드: 전신(.png), 머리~허벅지(.card.png), 모델 색(.json)
 
 use std::borrow::Cow;
 use std::fs;
@@ -39,6 +40,25 @@ pub struct ModelListing {
     entry: ModelEntry,
     has_cache: bool,
     profile: Option<serde_json::Value>,
+    /// 전신 썸네일 (mate:// 기준 상대 경로). 아직 안 찍었으면 None
+    thumbnail: Option<String>,
+    /// 카드 썸네일 (머리~허벅지, 3:4)
+    portrait: Option<String>,
+    /// 썸네일에서 뽑은 모델 색 (카드 배경)
+    look: Option<serde_json::Value>,
+}
+
+/// 썸네일 폴더. 찍는 방식이 바뀌면 버전을 올려 예전 것 대신 다시 찍게 한다.
+const THUMBNAILS: &str = "thumbnails/v3";
+
+/// 썸네일 종류별 파일 이름
+fn thumbnail_file(id: &str, kind: &str) -> Option<String> {
+    match kind {
+        "full" => Some(format!("{id}.png")),
+        "card" => Some(format!("{id}.card.png")),
+        "look" => Some(format!("{id}.json")),
+        _ => None,
+    }
 }
 
 pub fn data_root<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
@@ -244,7 +264,16 @@ pub fn list_models(app: AppHandle) -> Result<Vec<ModelListing>, String> {
             let profile = fs::read(root.join("profiles").join(format!("{}.json", entry.id)))
                 .ok()
                 .and_then(|bytes| serde_json::from_slice(&bytes).ok());
-            ModelListing { entry, has_cache, profile }
+            let served = |kind: &str| {
+                let name = thumbnail_file(&entry.id, kind)?;
+                root.join(THUMBNAILS).join(&name).is_file().then(|| format!("{THUMBNAILS}/{name}"))
+            };
+            let thumbnail = served("full");
+            let portrait = served("card");
+            let look = thumbnail_file(&entry.id, "look")
+                .and_then(|name| fs::read(root.join(THUMBNAILS).join(name)).ok())
+                .and_then(|bytes| serde_json::from_slice(&bytes).ok());
+            ModelListing { entry, has_cache, profile, thumbnail, portrait, look }
         })
         .collect())
 }
@@ -265,6 +294,40 @@ pub fn save_model_cache(app: AppHandle, request: tauri::ipc::Request<'_>) -> Res
     let directory = data_root(&app)?.join("cache");
     fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
     fs::write(directory.join(format!("{id}.bpmx")), bytes).map_err(|error| error.to_string())
+}
+
+/// 썸네일 저장 (설정 창 모델 카드용). 모델 id는 `x-model-id` 헤더(percent-encoded),
+/// 종류는 `x-thumb-kind` (full·card·look). 전신(full)을 마지막에 보내고, 그때 목록을 다시 그리게 한다.
+#[tauri::command]
+pub fn save_thumbnail(app: AppHandle, request: tauri::ipc::Request<'_>) -> Result<(), String> {
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err("binary body expected".into());
+    };
+    let header_text = |name: &str| {
+        request
+            .headers()
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .map(|value| percent_encoding::percent_decode_str(value).decode_utf8_lossy().into_owned())
+    };
+    let id = header_text("x-model-id").ok_or("x-model-id header missing")?;
+    let kind = header_text("x-thumb-kind").unwrap_or_else(|| "full".into());
+    let name = thumbnail_file(&id, &kind).ok_or_else(|| format!("unknown thumbnail kind {kind}"))?;
+    ensure_known(&app, &id)?;
+    let root = data_root(&app)?;
+    let directory = root.join(THUMBNAILS);
+    fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+    fs::write(directory.join(name), bytes).map_err(|error| error.to_string())?;
+    if kind == "full" {
+        // 예전 방식 썸네일: 버전 폴더 전(머리 위가 잘려 있었다), v2(정사각형 상반신 카드)
+        let old = root.join("thumbnails");
+        for name in [format!("{id}.png"), format!("v2/{id}.png"), format!("v2/{id}.bust.png"), format!("v2/{id}.json")] {
+            let _ = fs::remove_file(old.join(name));
+        }
+        let _ = fs::remove_dir(old.join("v2"));
+        let _ = app.emit("models-changed", ());
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -298,7 +361,7 @@ fn ensure_known(app: &AppHandle, id: &str) -> Result<(), String> {
 // mate:// 프로토콜 (Windows에서는 http://mate.localhost/...)
 // ---------------------------------------------------------------------------
 
-const SERVED_DIRECTORIES: &[&str] = &["models", "cache"];
+const SERVED_DIRECTORIES: &[&str] = &["models", "cache", "thumbnails"];
 
 pub fn handle_protocol<R: Runtime>(
     context: UriSchemeContext<'_, R>,

@@ -7,7 +7,17 @@ import { Color3, Color4 } from "@babylonjs/core/Maths/math.color";
 import { Vector3 } from "@babylonjs/core/Maths/math.vector";
 import { Scene } from "@babylonjs/core/scene";
 import { SdefInjector } from "babylon-mmd/esm/Loader/sdefInjector";
-import { diag, onCursor, onWindows, setPlatformRate, type CursorEvent, type ModelListing, type StageInfo } from "../ipc";
+import {
+  diag,
+  onCursor,
+  onWindows,
+  setPlatformRate,
+  type CursorEvent,
+  type MateStatus,
+  type ModelListing,
+  type Settings,
+  type StageInfo,
+} from "../ipc";
 import { createMmdWorld, loadCharacter, type LoadedCharacter, type MmdWorld } from "../mmd/loadModel";
 import { Behavior, rotateCss, type Arena } from "../behavior/behavior.ts";
 import { attachPointer } from "../behavior/interaction";
@@ -63,6 +73,9 @@ export class Stage {
   private windows: WindowRect[] = [];
   private ledges: Ledge[] = [];
   private platformFast = false;
+  /** 설정: 창 위에 올라가기, 커서 바라보기 */
+  private ledgesEnabled = true;
+  private gazeEnabled = true;
   /** 발 → 물리 기준점 (CSS px, 부드럽게 따라감). null이면 다음 프레임에 바로 맞춘다. */
   private pivotOffset: { x: number; y: number } | null = null;
   private activeUntil = 0;
@@ -262,6 +275,7 @@ export class Stage {
       this.behavior.preview(this.previewName);
     }
     this.onMotionChanged?.();
+    this.notifyStatus();
   }
 
   /** 행동이 고른 모션을 재생한다. 한 번짜리 모션은 끝나면 onFinished (없으면 idle). */
@@ -283,7 +297,40 @@ export class Stage {
           `ledge=${this.behavior.onLedge} ledges=${this.ledges.length}`,
       );
     }
+    this.notifyStatus();
   }
+
+  /** 설정 창의 설정을 적용한다 (크기, 다양한 동작, 창 위에 올라가기, 졸기까지 시간) */
+  applySettings(settings: Settings): void {
+    this.setHeight(settings.heightPx);
+    this.behavior.configure({
+      variety: settings.variety,
+      sleepAfter: settings.sleepMinutes > 0 ? settings.sleepMinutes * 60 : Number.POSITIVE_INFINITY,
+    });
+    this.gazeEnabled = settings.gaze;
+    if (this.ledgesEnabled !== settings.ledges) {
+      this.ledgesEnabled = settings.ledges;
+      this.updateLedges();
+    }
+  }
+
+  /** 지금 상태 (설정 창 아래 막대) */
+  status(): MateStatus {
+    return {
+      modelId: this.character?.entry.id ?? null,
+      motion: this.motionName,
+      preview: this.previewName ?? "auto",
+      state: this.behavior.state,
+    };
+  }
+
+  /** 상태가 바뀌었을 때 (모션 전환) */
+  onStatus: ((status: MateStatus) => void) | null = null;
+
+  private notifyStatus(): void {
+    this.onStatus?.(this.status());
+  }
+
 
   /** 발이 미끄러지지 않는 걷기 속도 (px/s, 정면 기준) */
   private walkSpeedPx(): number {
@@ -305,7 +352,8 @@ export class Stage {
   /** 창 목록·화면·캐릭터 키가 바뀌면 발판을 다시 계산한다. */
   private updateLedges(): void {
     const { top, ground, left, right } = this.baseArena();
-    this.ledges = computeLedges(this.windows, {
+    // 설정에서 창 위에 올라가기를 끄면 발판이 없다 (창 위에 있었으면 그대로 떨어진다)
+    this.ledges = !this.ledgesEnabled ? [] : computeLedges(this.windows, {
       top,
       ground,
       left,
@@ -394,6 +442,7 @@ export class Stage {
 
   /** 커서를 머리 기준 모델 로컬 좌표로. 커서가 멀면 null (정면 응시). */
   private gazeTarget(): GazeTarget | null {
+    if (!this.gazeEnabled) return null;
     const character = this.character;
     const cursor = this.cursor;
     if (!character || !cursor) {

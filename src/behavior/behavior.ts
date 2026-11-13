@@ -151,7 +151,7 @@ export class Behavior {
   // Node 타입 제거 모드는 생성자 매개변수 속성을 지원하지 않아 필드를 따로 둔다.
   private readonly actor: Actor;
   private readonly random: () => number;
-  private readonly options: BehaviorOptions;
+  private options: BehaviorOptions;
   /** 앉는 모션을 하는 중 (반복 모션으로 넘어가기 전) / 일어서는 중의 앉은 자세 */
   private seatMoving = false;
   private riseSeat: "edge" | "floor" = "floor";
@@ -203,6 +203,11 @@ export class Behavior {
   /** 발 기준점에서 머리 꼭대기까지 높이 (px). 앉으면 낮아진다. */
   get headHeight(): number {
     return this.actor.heightPx * (this.seat ? SIT_HEAD_RATIO : 1);
+  }
+
+  /** 설정 창에서 바꾼 옵션 (다양한 동작, 졸기까지 시간) */
+  configure(options: BehaviorOptions): void {
+    this.options = { ...this.options, ...options };
   }
 
   /** 사용자 입력(커서 근처·클릭·끌기)이 있었다. 졸고 있었으면 깬다. */
