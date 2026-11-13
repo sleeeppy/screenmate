@@ -2,11 +2,15 @@
 import { clamp, damp, quatFromEulerDeg, type Quat } from "./math.ts";
 
 /** 숨쉬기: 上半身을 3.6초 주기로 ±1.1° 앞뒤로. 들숨이 날숨보다 조금 짧다. */
+// Node 타입 제거 모드(테스트)는 생성자 매개변수 속성을 지원하지 않아 필드를 따로 둔다.
 export class Breathing {
-  constructor(
-    private readonly periodSeconds = 3.6,
-    private readonly amplitudeDeg = 1.1,
-  ) {}
+  private readonly periodSeconds: number;
+  private readonly amplitudeDeg: number;
+
+  constructor(periodSeconds = 3.6, amplitudeDeg = 1.1) {
+    this.periodSeconds = periodSeconds;
+    this.amplitudeDeg = amplitudeDeg;
+  }
 
   chest(nowSeconds: number, out: Quat): Quat {
     const phase = (nowSeconds / this.periodSeconds) % 1;
@@ -40,12 +44,17 @@ export class LookAt {
   private eyeYaw = 0;
   private eyePitch = 0;
 
-  constructor(
-    private readonly hasEyes: boolean,
-    private readonly depth = 18,
-    private readonly maxYaw = 35,
-    private readonly maxPitch = 20,
-  ) {}
+  private readonly hasEyes: boolean;
+  private readonly depth: number;
+  private readonly maxYaw: number;
+  private readonly maxPitch: number;
+
+  constructor(hasEyes: boolean, depth = 18, maxYaw = 35, maxPitch = 20) {
+    this.hasEyes = hasEyes;
+    this.depth = depth;
+    this.maxYaw = maxYaw;
+    this.maxPitch = maxPitch;
+  }
 
   update(target: GazeTarget | null, dtSeconds: number): GazeAngles {
     let yawTarget = 0;
@@ -72,5 +81,55 @@ export class LookAt {
       pitch: this.pitch,
       eyes: this.hasEyes ? { yaw: this.eyeYaw, pitch: this.eyePitch } : null,
     };
+  }
+}
+
+/**
+ * 매달려 흔들릴 때 팔·다리·머리가 몸보다 늦게 따라가는 2차 움직임.
+ *
+ * 몸(진자)의 각속도가 바뀌면 관성 때문에 팔다리는 잠깐 제자리에 남는다 → 몸 기준으로 반대쪽으로 꺾인다.
+ * 이 상대 각도를 감쇠 스프링으로 풀어 제자리로 돌아오게 한다. 결과는 도, 화면 반시계 +.
+ */
+export class SwingLag {
+  private angle = 0;
+  private velocity = 0;
+  private lastRoll: number | null = null;
+  private lastRate = 0;
+
+  private readonly hz: number;
+  private readonly damping: number;
+  private readonly maxDeg: number;
+
+  constructor(hz = 1.2, damping = 0.28, maxDeg = 20) {
+    this.hz = hz;
+    this.damping = damping;
+    this.maxDeg = maxDeg;
+  }
+
+  /** roll: 몸 기울기(라디안, 화면 반시계 +). null이면 흔들림이 없다 (스프링만 가라앉음). */
+  update(roll: number | null, dtSeconds: number): number {
+    if (dtSeconds <= 0) return this.angle;
+    if (roll !== null && this.lastRoll !== null) {
+      const rate = ((roll - this.lastRoll) / dtSeconds) * (180 / Math.PI);
+      // 몸 각속도가 바뀐 만큼 팔다리는 반대로 (관성)
+      this.velocity -= rate - this.lastRate;
+      this.lastRate = rate;
+    } else {
+      this.lastRate = 0;
+    }
+    this.lastRoll = roll;
+
+    const omega = 2 * Math.PI * this.hz;
+    const steps = Math.max(1, Math.ceil(dtSeconds * 240));
+    const h = dtSeconds / steps;
+    for (let i = 0; i < steps; i++) {
+      this.velocity += (-omega * omega * this.angle - 2 * this.damping * omega * this.velocity) * h;
+      this.angle += this.velocity * h;
+    }
+    if (Math.abs(this.angle) > this.maxDeg) {
+      this.angle = clamp(this.angle, -this.maxDeg, this.maxDeg);
+      this.velocity *= -0.3;
+    }
+    return this.angle;
   }
 }

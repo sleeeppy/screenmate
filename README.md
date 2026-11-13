@@ -21,10 +21,10 @@ npm run tauri dev
 앱은 모델을 앱 데이터 폴더로 가져와서 쓴다. 처음 실행할 때 한 번 가져오면 된다.
 
 - 트레이 아이콘 → **모델 가져오기…** → `models/` 안의 폴더 선택 (폴더마다 한 번)
-- 또는 명령줄로 한 번에:
+- 또는 명령줄로 한 번에 (저장소 루트에서. 앱은 `src-tauri`에서 실행되므로 절대 경로로 넘긴다):
 
 ```bash
-npm run tauri dev -- -- --import "models/DIVA風水着セット" "models/Sour式鏡音リン・レンVer.2.01" "models/YYB式鏡音レンver1.00"
+npx tauri dev -- -- --import "$PWD/models/DIVA風水着セット" "$PWD/models/Sour式鏡音リン・レンVer.2.01" "$PWD/models/YYB式鏡音レンver1.00"
 ```
 
 앱 데이터 위치: Windows `%APPDATA%\dev.sleeeppy.screenmate`, macOS `~/Library/Application Support/dev.sleeeppy.screenmate`.

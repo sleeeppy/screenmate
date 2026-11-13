@@ -7,7 +7,7 @@ import type { ResolvedMorphs } from "../mmd/morphMap";
 import { Blinker } from "./blink";
 import type { Motion } from "./dsl";
 import { motionFinished, motionFrame, sampleRotation, samplePosition, sampleWeight } from "./evaluate";
-import { Breathing, LookAt, type GazeTarget } from "./layers";
+import { Breathing, LookAt, SwingLag, type GazeTarget } from "./layers";
 import { IDENTITY, quatCopy, quatFromEulerDeg, quatMul, quatSlerp, type Quat, type Vec3 } from "./math";
 
 /**
@@ -50,7 +50,27 @@ interface Playing {
 export interface DriverInputs {
   /** 시선 목표 (모델 로컬 단위, 머리 기준). 없으면 정면으로 돌아온다. */
   gaze(): GazeTarget | null;
+  /** 들렸거나 떨어지는 중이면 몸 기울기(라디안, 화면 반시계 +). 아니면 null. */
+  sway(): number | null;
 }
+
+/**
+ * 흔들림 2차 움직임을 본마다 얼마나 나눠 줄지 (SwingLag 각도 배율, 화면 평면 = 각 본의 Z축).
+ * 다리는 下半身 → 足으로 누적된다. 무릎은 크게 흔들릴수록 조금 더 굽힌다.
+ */
+const SWING_SHARE: Record<string, number> = {
+  下半身: 0.35,
+  左足: 0.35,
+  右足: 0.35,
+  // 종아리는 허벅지보다 한 번 더 늦게 (채찍처럼). 다리 끝은 몸보다 최대 약 17° 늦다.
+  左ひざ: 0.15,
+  右ひざ: 0.15,
+  上半身: 0.1,
+  首: 0.25,
+  左腕: 0.7,
+  右腕: 0.7,
+};
+const SWING_KNEE_BEND = 0.5;
 
 const scratchQuatB: Quat = [0, 0, 0, 1];
 const babylonQuat = new Quaternion();
@@ -69,6 +89,7 @@ export class MotionDriver {
   private readonly armCorrection: Record<string, Quat>;
   private readonly blinker = new Blinker();
   private readonly breathing = new Breathing();
+  private readonly swingLag = new SwingLag();
   private readonly lookAt: LookAt;
   private playing: Playing[] = [];
   private lastTime = -1;
@@ -269,6 +290,17 @@ export class MotionDriver {
     addRotation("首", quatFromEulerDeg(gaze.pitch * 0.4, gaze.yaw * 0.4, 0, scratchQuatB));
     addRotation("頭", quatFromEulerDeg(gaze.pitch * 0.6, gaze.yaw * 0.6, 0, scratchQuatB));
     if (gaze.eyes) addRotation("両目", quatFromEulerDeg(gaze.eyes.pitch, gaze.eyes.yaw, 0, scratchQuatB));
+
+    // 흔들림 2차 움직임: 바닥에 서 있을 때는 0으로 가라앉는다.
+    const lag = this.swingLag.update(this.inputs.sway(), dt);
+    if (Math.abs(lag) > 0.05) {
+      for (const [name, share] of Object.entries(SWING_SHARE)) {
+        addRotation(name, quatFromEulerDeg(0, 0, lag * share, scratchQuatB));
+      }
+      const bend = -Math.abs(lag) * SWING_KNEE_BEND;
+      addRotation("左ひざ", quatFromEulerDeg(bend, 0, 0, scratchQuatB));
+      addRotation("右ひざ", quatFromEulerDeg(bend, 0, 0, scratchQuatB));
+    }
   }
 
   private writeBones(): void {

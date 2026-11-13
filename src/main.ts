@@ -42,6 +42,8 @@ async function boot(target: HTMLCanvasElement): Promise<void> {
   // 기본은 자율 행동. 실행 옵션(--motion)이 있거나 트레이에서 고르면 그 모션만 미리보기한다.
   const options = await launchOptions();
   stage.benchIdle = options.benchIdle;
+  stage.dropOnWindow = options.dropOnWindow;
+  stage.demoHang = options.demoHang;
   if (options.motion) stage.playMotion(options.motion);
   const syncMotionMenu = () =>
     void registerMotions(

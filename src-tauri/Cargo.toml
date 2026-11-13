@@ -1,7 +1,7 @@
 [package]
 name = "screenmate"
 version = "0.1.0"
-description = "Desktop mate that lives on the Windows desktop"
+description = "Desktop mate that lives on the desktop"
 edition = "2021"
 rust-version = "1.77.2"
 
@@ -23,6 +23,11 @@ tauri-plugin-dialog = "2"
 # Win32: 창 스타일, 커서 위치
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging"] }
+
+# macOS: 창 목록 (CGWindowListCopyWindowInfo)
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.10"
+core-graphics = "0.25"
 
 [profile.release]
 codegen-units = 1

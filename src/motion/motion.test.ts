@@ -2,9 +2,11 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { DEFAULT_MORPH_NAMES } from "../mmd/morphMap.ts";
 import { MOTIONS } from "./clips/index.ts";
+import { WALK_SPEED_UNITS } from "./clips/walk.ts";
 import { defineMotion, k } from "./dsl.ts";
 import { motionFinished, motionFrame, samplePosition, sampleRotation, sampleWeight } from "./evaluate.ts";
 import { bezierEase, quatFromEulerDeg, quatMul, quatSlerp, type Quat } from "./math.ts";
+import { SwingLag } from "./layers.ts";
 import { encodeShiftJis, interpolationBytes, motionToVmd } from "./vmd.ts";
 
 const close = (actual: number, expected: number, epsilon = 1e-4) =>
@@ -103,6 +105,8 @@ test("걷기: 디딤발이 일정 속도로 뒤로 가서 몸 이동 속도와 �
   const z = (frame: number) => samplePosition(left, frame, walk, [0, 0, 0])[2];
   close(z(7.5) - z(0), z(15) - z(7.5), 1e-3);
   assert.ok(z(15) > z(0)); // 뒤(+z)로
+  // 디딤발 속도 = 몸 이동 속도 상수 (프레임 30fps)
+  close((z(15) - z(0)) / (15 / 30), WALK_SPEED_UNITS, 1e-3);
   const lift = (frame: number) => samplePosition(left, frame, walk, [0, 0, 0])[1];
   assert.ok(lift(23) > 0.5);
   close(lift(7), 0);
@@ -124,4 +128,22 @@ test("VMD: 헤더, 프레임 수, 보간 64바이트 배치", () => {
   assert.equal(interpolation[4], 0); // X_y1
   assert.equal(interpolation[16], 64); // 1행 = Y_x1부터
   assert.equal(interpolation[63], 0);
+});
+
+test("흔들림 2차 움직임: 몸이 반시계로 돌기 시작하면 팔다리는 시계 방향으로 처졌다가 가라앉는다", () => {
+  const lag = new SwingLag();
+  const dt = 1 / 60;
+  let roll = 0;
+  lag.update(roll, dt);
+  let min = 0;
+  for (let i = 0; i < 12; i++) {
+    roll += 0.02; // 1.2 rad/s 반시계
+    min = Math.min(min, lag.update(roll, dt));
+  }
+  assert.ok(min < -3, `처짐 ${min}°`);
+  let last = 0;
+  for (let i = 0; i < 240; i++) last = lag.update(roll, dt); // 4초 정지
+  assert.ok(Math.abs(last) < 0.5, `가라앉음 ${last}°`);
+  // 서 있으면(null) 입력 없이 가라앉기만 한다
+  assert.ok(Math.abs(lag.update(null, dt)) < 0.5);
 });

@@ -1,5 +1,6 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import type { WindowRect } from "./behavior/platforms.ts";
 
 /** 웹뷰 좌표(CSS px, 창 왼쪽 위 기준) 사각형 */
 export interface CssRect {
@@ -52,7 +53,20 @@ export const onReload = (handler: () => void): Promise<UnlistenFn> => listen("re
 
 export const stageInfo = (): Promise<StageInfo> => invoke("stage_info");
 
-export const launchOptions = (): Promise<{ motion: string | null; benchIdle: boolean }> => invoke("launch_options");
+/** 보이는 최상위 창 목록 (앞 → 뒤). 바뀔 때만 온다. */
+export const onWindows = (handler: (windows: WindowRect[]) => void): Promise<UnlistenFn> =>
+  listen<WindowRect[]>("windows", (event) => handler(event.payload));
+
+/** 창 목록 폴링 속도: 캐릭터가 창 위에 있으면 빠르게 (창을 따라가야 해서) */
+export const setPlatformRate = (fast: boolean): Promise<void> => invoke("set_platform_rate", { fast });
+
+export const launchOptions = (): Promise<{
+  motion: string | null;
+  benchIdle: boolean;
+  dropOnWindow: boolean;
+  demoHang: boolean;
+}> =>
+  invoke("launch_options");
 
 /** 트레이 "모션 미리보기" 메뉴를 채운다. */
 export const registerMotions = (items: { name: string; label: string }[], current: string | null): Promise<void> =>
