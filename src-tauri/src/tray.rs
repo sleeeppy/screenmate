@@ -38,15 +38,15 @@ const SIZES: &[(&str, f64)] = &[("작게", 200.0), ("보통", 260.0), ("크게",
 
 pub fn install(app: &AppHandle) -> tauri::Result<()> {
     let menu = build_menu(app)?;
-    let mut builder = TrayIconBuilder::with_id(TRAY_ID)
+    let icon = tauri::image::Image::from_bytes(include_bytes!("../icons/trayTemplate.png"))?;
+    TrayIconBuilder::with_id(TRAY_ID)
         .tooltip("ScreenMate")
         .menu(&menu)
         .show_menu_on_left_click(true)
-        .on_menu_event(on_menu_event);
-    if let Some(icon) = app.default_window_icon() {
-        builder = builder.icon(icon.clone());
-    }
-    builder.build(app)?;
+        .icon(icon)
+        .icon_as_template(true)
+        .on_menu_event(on_menu_event)
+        .build(app)?;
     Ok(())
 }
 
