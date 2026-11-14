@@ -42,6 +42,8 @@ impl CssRect {
 pub struct OverlayState {
     geometry: Mutex<Geometry>,
     interest: Mutex<Option<CssRect>>,
+    /// 오버레이를 띄운 모니터 전체 (작업 영역 아님). 물리 px 왼쪽 위·크기와 배율
+    monitor: Mutex<Option<(i32, i32, u32, u32, f64)>>,
 }
 
 impl OverlayState {
@@ -49,6 +51,11 @@ impl OverlayState {
     pub fn origin(&self) -> (i32, i32, f64) {
         let geometry = *self.geometry.lock().unwrap();
         (geometry.x, geometry.y, geometry.scale)
+    }
+
+    /// 오버레이를 띄운 모니터 전체 (물리 px 왼쪽 위·크기, 배율)
+    pub fn monitor(&self) -> Option<(i32, i32, u32, u32, f64)> {
+        *self.monitor.lock().unwrap()
     }
 }
 
@@ -72,7 +79,7 @@ pub fn install(app: &AppHandle, window: &WebviewWindow) -> tauri::Result<()> {
     let state = Arc::new(OverlayState::default());
     app.manage(state.clone());
 
-    fit_primary_monitor(window)?;
+    *state.monitor.lock().unwrap() = fit_primary_monitor(window)?;
     window.set_ignore_cursor_events(true)?;
     reapply_window_chrome(window);
     refresh_geometry(window, &state);
@@ -112,15 +119,16 @@ fn refresh_geometry(window: &WebviewWindow, state: &OverlayState) {
     };
 }
 
-fn fit_primary_monitor(window: &WebviewWindow) -> tauri::Result<()> {
+/// 주 모니터를 덮게 놓고, 그 모니터 사각형(물리 px)과 배율을 돌려준다.
+fn fit_primary_monitor(window: &WebviewWindow) -> tauri::Result<Option<(i32, i32, u32, u32, f64)>> {
     let Some(monitor) = window.primary_monitor()? else {
-        return Ok(());
+        return Ok(None);
     };
     let position = monitor.position();
     let size = monitor.size();
     window.set_position(PhysicalPosition::new(position.x, position.y))?;
     window.set_size(PhysicalSize::new(size.width, size.height))?;
-    Ok(())
+    Ok(Some((position.x, position.y, size.width, size.height, monitor.scale_factor())))
 }
 
 /// Alt+Tab·작업표시줄에서 숨기고, 클릭해도 포커스를 뺏지 않으며, DWM 테두리를 없앤다.

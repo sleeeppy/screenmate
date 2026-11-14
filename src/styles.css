@@ -15,6 +15,12 @@ body {
   /* 캐릭터를 클릭하면 캔버스가 포커스를 받아 사각형 포커스 링이 그려진다 */
   outline: none;
   touch-action: none;
+  /* 전체화면 앱이 뜨고 사라질 때 (engine.ts HIDE_FADE_MS와 같게) */
+  transition: opacity 250ms ease;
+}
+
+#stage.hidden {
+  opacity: 0;
 }
 
 #stage:focus,

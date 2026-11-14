@@ -56,6 +56,8 @@ const SEAT_EDGE_BOX = { widthRatio: 1.35, heightRatio: 1.75, footPadRatio: 0.5 }
 const REVEAL_DELAY_MS = 350;
 /** 업로드할 텍스처의 최대 한 변 길이 */
 const MAX_TEXTURE_SIZE = 1024;
+/** 전체화면으로 숨길 때 사라지는 시간 (styles.css의 #stage.hidden 전환과 같게) */
+const HIDE_FADE_MS = 300;
 
 export class Stage {
   readonly engine: Engine;
@@ -89,6 +91,9 @@ export class Stage {
   private previewName: string | null = null;
   private snapNextClip = false;
   private lastFrame = 0;
+  /** 전체화면 앱이 떠 있어 숨김. 사라지는 동안만 그리고 그 뒤로는 행동·물리·그리기를 멈춘다 */
+  private hidden = false;
+  private hiddenSince = 0;
   /** 성능 측정용: 커서를 무시하고 대기 fps로 고정 (`--bench-idle`) */
   benchIdle = false;
   /** 검증용: 발판이 잡히면 가장 넓은 창 위에서 한 번 떨어뜨린다 (`--drop-on-window`) */
@@ -169,7 +174,7 @@ export class Stage {
       this.updateLedges();
     });
     void onCursor((event) => {
-      this.cursor = event.near && !this.benchIdle ? event : null;
+      this.cursor = event.near && !this.benchIdle && !this.hidden ? event : null;
       // 커서가 다가오는 것도 입력이다 (오래 입력이 없으면 졸고, 다가오면 깬다)
       if (this.cursor) this.behavior.noteActivity();
     });
@@ -301,6 +306,20 @@ export class Stage {
   }
 
   /** 설정 창의 설정을 적용한다 (크기, 다양한 동작, 창 위에 올라가기, 졸기까지 시간) */
+  /** 전체화면 앱이 뜨면 숨긴다 (서서히 사라진 뒤 멈춤). 돌아오면 멈췄던 자리에서 이어서 움직인다. */
+  setHidden(hidden: boolean): void {
+    if (hidden === this.hidden) return;
+    this.hidden = hidden;
+    this.canvas.classList.toggle("hidden", hidden);
+    if (hidden) {
+      this.hiddenSince = performance.now();
+      this.cursor = null;
+      // 숨어 있는 동안 클릭은 모두 아래 창으로
+      this.hit.release();
+    }
+    diag(`fullscreen ${hidden ? "hide" : "show"}`);
+  }
+
   applySettings(settings: Settings): void {
     this.setHeight(settings.heightPx);
     this.behavior.configure({
@@ -515,6 +534,11 @@ export class Stage {
           : this.cursor !== null || own === "near"
             ? "near"
             : "idle";
+      // 숨김: 사라지는 동안(HIDE_FADE_MS)만 그리고 멈춘다. 다시 보일 때 멈춘 시간만큼 건너뛰지 않게 lastFrame을 비운다.
+      if (this.hidden && now - this.hiddenSince > HIDE_FADE_MS) {
+        this.lastFrame = 0;
+        return;
+      }
       // 캐릭터가 없으면 그릴 것도 없다 (vsync 간격 측정만 계속)
       if (!this.pacer.tick(now, activity) || !this.character) {
         if (!this.character) this.lastFrame = 0;
