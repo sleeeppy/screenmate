@@ -1,6 +1,8 @@
 import {
   broadcastStatus,
   diag,
+  fullscreenState,
+  onFullscreen,
   onStatusRequest,
   getSettings,
   launchOptions,
@@ -40,6 +42,9 @@ async function boot(target: HTMLCanvasElement): Promise<void> {
   let loadedId: string | null = null;
 
   stage.applySettings(settings);
+  // 전체화면 앱(게임·영상)이 떠 있으면 숨는다
+  void onFullscreen((fullscreen) => stage.setHidden(fullscreen));
+  stage.setHidden(await fullscreenState().catch(() => false));
   // 설정 창: 지금 상태를 알리고, 물으면 다시 알린다
   stage.onStatus = (status) => void broadcastStatus(status).catch(() => {});
   void onStatusRequest(() => void broadcastStatus(stage.status()).catch(() => {}));

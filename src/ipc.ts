@@ -94,6 +94,13 @@ export const stageInfo = (): Promise<StageInfo> => invoke("stage_info");
 export const onWindows = (handler: (windows: WindowRect[]) => void): Promise<UnlistenFn> =>
   listen<WindowRect[]>("windows", (event) => handler(event.payload));
 
+/** 전체화면 앱(게임·영상)이 떴다/사라졌다. 바뀔 때만 온다. */
+export const onFullscreen = (handler: (fullscreen: boolean) => void): Promise<UnlistenFn> =>
+  listen<boolean>("fullscreen", (event) => handler(event.payload));
+
+/** 지금 전체화면인지 (시작할 때 한 번) */
+export const fullscreenState = (): Promise<boolean> => invoke("fullscreen_state");
+
 /** 창 목록 폴링 속도: 캐릭터가 창 위에 있으면 빠르게 (창을 따라가야 해서) */
 export const setPlatformRate = (fast: boolean): Promise<void> => invoke("set_platform_rate", { fast });
 

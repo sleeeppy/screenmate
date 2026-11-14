@@ -20,6 +20,7 @@ pub fn run() {
             overlay::set_click_through,
             overlay::stage_info,
             platforms::set_platform_rate,
+            platforms::fullscreen_state,
             models::list_models,
             models::save_model_cache,
             models::save_profile,
